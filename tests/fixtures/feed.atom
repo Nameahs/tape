@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<title>Latest Filings</title>
+<entry>
+<title>8-K - Example Corp (0000000001) (Filer)</title>
+<link rel="alternate" type="text/html" href="https://www.sec.gov/Archives/edgar/data/1/000000000126000101/0000000001-26-000101-index.htm"/>
+<summary type="html"> &lt;b&gt;Filed:&lt;/b&gt; 2026-10-13 &lt;b&gt;AccNo:&lt;/b&gt; 0000000001-26-000101 &lt;b&gt;Size:&lt;/b&gt; 300 KB&lt;br&gt;Item 5.02: Departure of Directors</summary>
+<updated>2026-10-13T16:31:02-04:00</updated>
+<category scheme="https://www.sec.gov/" label="form type" term="8-K"/>
+<id>urn:tag:sec.gov,2008:accession-number=0000000001-26-000101</id>
+</entry>
+<entry>
+<title>8-K/A - Sample Holdings Inc (0000000002) (Filer)</title>
+<link rel="alternate" type="text/html" href="https://www.sec.gov/Archives/edgar/data/2/000000000226000007/0000000002-26-000007-index.htm"/>
+<summary type="html"> &lt;b&gt;AccNo:&lt;/b&gt; 0000000002-26-000007</summary>
+<updated>2026-10-13T16:20:00-04:00</updated>
+<id>urn:tag:sec.gov,2008:accession-number=0000000002-26-000007</id>
+</entry>
+</feed>

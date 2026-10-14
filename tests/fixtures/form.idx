@@ -1,0 +1,8 @@
+Description:           Daily Index of EDGAR Dissemination Feed by Form Type
+Last Data Received:    October 13, 2026
+
+Form Type   Company Name                                                  CIK         Date Filed  File Name
+---------------------------------------------------------------------------------------------------------------------------------------------
+10-Q        Other Co                                                      3           20261013    edgar/data/3/0000000003-26-000001.txt
+8-K         Example Corp                                                  1           20261013    edgar/data/1/0000000001-26-000101.txt
+8-K/A       Sample Holdings Inc                                           2           20261013    edgar/data/2/0000000002-26-000007.txt
