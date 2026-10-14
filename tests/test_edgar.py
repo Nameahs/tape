@@ -1,3 +1,5 @@
+import os
+import time
 from datetime import date
 from pathlib import Path
 
@@ -63,3 +65,48 @@ def test_retries_on_429(monkeypatch):
 def test_daily_index_missing_on_weekend_is_empty():
     respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261011.idx").respond(404)
     assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 11)) == []
+
+
+def _tickers_text():
+    return (FIX / "company_tickers.json").read_text()
+
+
+@respx.mock
+def test_ticker_map_is_cached_on_disk(tmp_path):
+    route = respx.get(TICKERS_URL).respond(200, text=_tickers_text())
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert (tmp_path / "company_tickers.json").exists()
+    # A new process (new Edgar) reads the cache instead of downloading again.
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_stale_ticker_cache_is_refreshed(tmp_path):
+    cache = tmp_path / "company_tickers.json"
+    cache.write_text('{"0": {"cik_str": 1, "ticker": "OLD", "title": "Example Corp"}}')
+    day_old = time.time() - 25 * 3600
+    os.utime(cache, (day_old, day_old))
+    route = respx.get(TICKERS_URL).respond(200, text=_tickers_text())
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert route.call_count == 1
+    assert "EXMP" in cache.read_text()
+
+
+@respx.mock
+def test_stale_ticker_cache_used_when_refresh_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    cache = tmp_path / "company_tickers.json"
+    cache.write_text('{"0": {"cik_str": 1, "ticker": "OLD", "title": "Example Corp"}}')
+    day_old = time.time() - 25 * 3600
+    os.utime(cache, (day_old, day_old))
+    respx.get(TICKERS_URL).respond(500)
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "OLD"
+
+
+@respx.mock
+def test_corrupt_ticker_cache_is_replaced(tmp_path):
+    (tmp_path / "company_tickers.json").write_text('{"0": {"cik_str"')
+    respx.get(TICKERS_URL).respond(200, text=_tickers_text())
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert "EXMP" in (tmp_path / "company_tickers.json").read_text()

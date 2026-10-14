@@ -39,7 +39,7 @@ tape dashboard           # writes out/dashboard.html
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | none | Jev API key |
 | `TAPE_USER_AGENT` | placeholder | Contact string sent to the SEC |
-| `TAPE_DB_PATH` | `data/tape.db` | SQLite file |
+| `TAPE_DB_PATH` | `data/tape.db` | SQLite file; the cached SEC ticker map (refreshed daily) is kept in the same folder |
 | `TAPE_JEV_MODEL` | `jev-latest` | Jev model name |
 | `TAPE_MAX_CHARS` | `12000` | Filing characters sent to Jev |
 | `TAPE_BRIEF_NOW`, `TAPE_DIGEST`, ... | see `tape/config.py` | Router thresholds |
