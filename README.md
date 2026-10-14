@@ -13,7 +13,7 @@ EDGAR feed -> clean text -> Jev (materiality, event, direction, surprise, boiler
            -> router (now / digest / log) -> Agent37 agent writes the brief -> Telegram
 ```
 
-See [architecture.md](architecture.md) for the full design.
+See [architecture.md](architecture.md) for the full design and [deploy/agent37.md](deploy/agent37.md) to run it on Agent37.
 
 ## Quick start
 
@@ -25,8 +25,11 @@ export TAPE_USER_AGENT="Tape you@example.com"    # the SEC requires a contact
 tape init                # create the SQLite store
 tape run                 # one pass: ingest new 8-Ks, score, route
 tape pending             # filings waiting for a brief (what the agent reads)
+tape brief ACC --text .. # save a brief the agent wrote
+tape digest [--send]     # material filings from the last 24h (optionally to Telegram)
 tape backfill --days 90  # score past filings for the evaluation
 tape evaluate            # prices, abnormal returns, metrics vs baselines
+tape reroute             # re-apply tuned thresholds without re-scoring
 tape dashboard           # writes out/dashboard.html
 ```
 
