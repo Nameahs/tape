@@ -82,6 +82,21 @@ def cmd_digest(args, settings, conn) -> int:
     return 0
 
 
+def cmd_evaluate(args, settings, conn) -> int:
+    from pathlib import Path
+
+    from tape.evaluate import YFinancePrices, compute_outcomes, evaluate, format_report, load_frame
+
+    if not args.skip_prices:
+        print(f"outcomes added: {compute_outcomes(conn, YFinancePrices())}")
+    report = evaluate(load_frame(conn))
+    print(format_report(report))
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(report.to_json())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tape", description="SEC 8-K watcher scored by Jev")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -100,6 +115,10 @@ def build_parser() -> argparse.ArgumentParser:
     d = sub.add_parser("digest", help="print the digest of recent material filings")
     d.add_argument("--hours", type=int, default=24)
     d.set_defaults(fn=cmd_digest)
+    e = sub.add_parser("evaluate", help="pull prices, compute abnormal returns, compare to baselines")
+    e.add_argument("--skip-prices", action="store_true", help="use outcomes already stored")
+    e.add_argument("--out", default="out/eval.json")
+    e.set_defaults(fn=cmd_evaluate)
     return p
 
 
