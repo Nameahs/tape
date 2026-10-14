@@ -1,0 +1,77 @@
+from typesafe_sdk import Choice, Noul, Score
+
+from tape import db
+from tape.score import EVENTS, MATERIALITY_LEVELS, QUESTIONS, score_many, score_one, state_for
+from tests.conftest import make_filing
+from tests.fakes import FakeJev
+
+
+def _row(conn, n=1, **kw):
+    db.upsert_filing(conn, make_filing(n, **kw))
+    return conn.execute("SELECT * FROM filings WHERE accession_no = ?", (make_filing(n).accession_no,)).fetchone()
+
+
+def test_question_set_shape():
+    assert set(QUESTIONS) == {"materiality", "event", "direction", "surprise", "boilerplate"}
+    assert isinstance(QUESTIONS["materiality"], Score) and len(MATERIALITY_LEVELS) == 5
+    assert isinstance(QUESTIONS["event"], Choice) and "other" in EVENTS
+    assert isinstance(QUESTIONS["surprise"], Noul)
+    # Serializes to the wire format the API expects.
+    assert QUESTIONS["materiality"].model_dump()["type"] == "score"
+
+
+def test_state_for_splits_items(conn):
+    state = state_for(_row(conn))
+    assert state["items"] == ["2.02", "9.01"]
+    assert state["company"] == "Example Corp"
+
+
+def test_score_one_maps_answers_and_cost(conn):
+    row = _row(conn, clean_text="The CEO tendered her resignation.")
+    s = score_one(FakeJev(), row, "jev-latest", price_per_m=0.042)
+    assert s.materiality == 4.6  # 3.6 on Jev's 0..4 scale
+    assert s.event == "leadership_change" and s.direction == "bad"
+    assert s.surprise == 0.9
+    assert s.cost_usd == 1000 * 0.042 / 1_000_000
+    assert s.model == "jev-fake"
+
+
+def test_score_many_skips_failures(conn):
+    rows = [_row(conn, 1, clean_text="fine"), _row(conn, 2, clean_text="explode please")]
+    out = score_many(FakeJev(fail_on={"explode"}), rows, "m", 0.042, workers=2)
+    assert [s.accession_no for s in out] == [rows[0]["accession_no"]]
+
+
+def test_contract_with_real_sdk(conn):
+    """Run the real TypeSafe client over a mock transport: request shape in, typed answers out."""
+    import json
+
+    import httpx2
+    from typesafe_sdk import TypeSafeClient
+
+    sent = {}
+
+    def handler(request):
+        sent.update(json.loads(request.content))
+        levels = {str(i): 0.2 for i in range(5)}
+        return httpx2.Response(200, json={
+            "model": "jev-1.13",
+            "usage": {"input_tokens": 812, "output_tokens": 5},
+            "answers": {
+                "materiality": {"type": "score", "score": 3.2, "confidence": 0.8,
+                                "legend": {k: "x" for k in levels}, "probabilities": levels},
+                "event": {"type": "choice", "choice": "mna", "confidence": 0.9, "probabilities": {"mna": 0.9}},
+                "direction": {"type": "choice", "choice": "good", "confidence": 0.7, "probabilities": {"good": 0.7}},
+                "surprise": {"type": "noul", "noul": 0.6},
+                "boilerplate": {"type": "noul", "noul": 0.1},
+            },
+        })
+
+    client = TypeSafeClient(api_key="test", transport=httpx2.MockTransport(handler))
+    s = score_one(client, _row(conn), "jev-latest", 0.042)
+    assert sent["model"] == "jev-latest"
+    assert sent["questions"]["materiality"]["type"] == "score"
+    assert len(sent["questions"]["materiality"]["criteria"]) == 5
+    assert sent["state"]["items"] == ["2.02", "9.01"]
+    assert (s.materiality, s.event, s.input_tokens) == (4.2, "mna", 812)
+    assert '"jev-1.13"' in s.raw_json
