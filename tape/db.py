@@ -188,7 +188,7 @@ def digest_since(conn: sqlite3.Connection, since_iso: str) -> list[sqlite3.Row]:
         """
         SELECT f.accession_no, f.ticker, f.company, f.url, s.materiality, s.event, s.direction
         FROM briefs b JOIN filings f USING (accession_no) JOIN scores s USING (accession_no)
-        WHERE b.route IN ('now', 'digest') AND f.accepted_at >= ?
+        WHERE b.route IN ('now', 'digest') AND julianday(f.accepted_at) >= julianday(?)
         ORDER BY s.materiality DESC
         """,
         (since_iso,),

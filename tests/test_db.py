@@ -55,3 +55,14 @@ def test_route_constraint(conn):
     db.upsert_filing(conn, make_filing())
     with pytest.raises(sqlite3.IntegrityError):
         db.set_route(conn, make_filing().accession_no, "maybe")
+
+
+def test_digest_window_compares_instants_not_strings(conn):
+    # 2026-10-13 21:00 ET is 2026-10-14 01:00 UTC, so it is inside a window starting 00:30 UTC,
+    # even though the raw string "2026-10-13T21:00" sorts before "2026-10-14T00:30".
+    f = make_filing(1, accepted_at="2026-10-13T21:00:00-04:00")
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no, 3.0))
+    db.set_route(conn, f.accession_no, "digest")
+    assert len(db.digest_since(conn, "2026-10-14T00:30:00+00:00")) == 1
+    assert db.digest_since(conn, "2026-10-14T01:30:00+00:00") == []
