@@ -97,6 +97,15 @@ def cmd_evaluate(args, settings, conn) -> int:
     return 0
 
 
+def cmd_dashboard(args, settings, conn) -> int:
+    from pathlib import Path
+
+    from tape.dashboard import write
+
+    print(f"wrote {write(conn, Path(args.out), Path(args.report))}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tape", description="SEC 8-K watcher scored by Jev")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -119,6 +128,10 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--skip-prices", action="store_true", help="use outcomes already stored")
     e.add_argument("--out", default="out/eval.json")
     e.set_defaults(fn=cmd_evaluate)
+    ds = sub.add_parser("dashboard", help="write the static HTML dashboard")
+    ds.add_argument("--out", default="out/dashboard.html")
+    ds.add_argument("--report", default="out/eval.json")
+    ds.set_defaults(fn=cmd_dashboard)
     return p
 
 
