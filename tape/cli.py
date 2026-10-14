@@ -78,7 +78,12 @@ def format_digest(rows) -> str:
 
 def cmd_digest(args, settings, conn) -> int:
     since = (datetime.now(UTC) - timedelta(hours=args.hours)).isoformat()
-    print(format_digest(db.digest_since(conn, since)))
+    text = format_digest(db.digest_since(conn, since))
+    if args.send:
+        from tape.notify import send_telegram
+
+        send_telegram(text)
+    print(text)
     return 0
 
 
@@ -123,6 +128,7 @@ def build_parser() -> argparse.ArgumentParser:
     br.set_defaults(fn=cmd_brief)
     d = sub.add_parser("digest", help="print the digest of recent material filings")
     d.add_argument("--hours", type=int, default=24)
+    d.add_argument("--send", action="store_true", help="also send via Telegram Bot API")
     d.set_defaults(fn=cmd_digest)
     e = sub.add_parser("evaluate", help="pull prices, compute abnormal returns, compare to baselines")
     e.add_argument("--skip-prices", action="store_true", help="use outcomes already stored")
