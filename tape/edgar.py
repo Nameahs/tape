@@ -134,7 +134,7 @@ def parse_feed(xml: str) -> list[FilingRef]:
         if not m or not acc or m["form"] != "8-K":  # skip 8-K/A amendments
             continue
         refs.append(FilingRef(acc[1], m["cik"], m["company"].strip(), m["form"], e.link))
-    return refs
+    return _dedupe(refs)
 
 
 def parse_form_index(text: str) -> list[FilingRef]:
@@ -154,7 +154,23 @@ def parse_form_index(text: str) -> list[FilingRef]:
         acc_no = acc[1]
         folder = f"{SEC}/Archives/edgar/data/{int(cik)}/{acc_no.replace('-', '')}"
         refs.append(FilingRef(acc_no, f"{int(cik):010d}", company, form, f"{folder}/{acc_no}-index.htm"))
-    return refs
+    return _dedupe(refs)
+
+
+def _dedupe(refs: list[FilingRef]) -> list[FilingRef]:
+    """Drop repeat accession numbers, keeping the first listing.
+
+    A filing made jointly by several registrants (a parent and its operating subsidiary, say)
+    is listed once per filer under the same accession number. It is one document, so we only
+    want to fetch and score it once.
+    """
+    seen: set[str] = set()
+    out = []
+    for ref in refs:
+        if ref.accession_no not in seen:
+            seen.add(ref.accession_no)
+            out.append(ref)
+    return out
 
 
 @dataclass(frozen=True)
