@@ -63,3 +63,34 @@ def test_retries_on_429(monkeypatch):
 def test_daily_index_missing_on_weekend_is_empty():
     respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261011.idx").respond(404)
     assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 11)) == []
+
+
+_CO_REG_ENTRY = """<entry>
+<title>8-K - {company} ({cik}) (Filer)</title>
+<link rel="alternate" type="text/html" href="https://www.sec.gov/Archives/edgar/data/{n}/000000000426000011/0000000004-26-000011-index.htm"/>
+<summary type="html"> &lt;b&gt;AccNo:&lt;/b&gt; 0000000004-26-000011</summary>
+<id>urn:tag:sec.gov,2008:accession-number=0000000004-26-000011</id>
+</entry>"""
+
+
+def test_parse_feed_dedupes_co_registrants():
+    entries = _CO_REG_ENTRY.format(company="Parent Utility Inc", cik="0000000004", n=4) + _CO_REG_ENTRY.format(
+        company="Parent Utility Operating Co", cik="0000000005", n=5
+    )
+    xml = f'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">{entries}</feed>'
+    refs = parse_feed(xml)
+    assert len(refs) == 1
+    assert refs[0].accession_no == "0000000004-26-000011"
+    assert refs[0].company == "Parent Utility Inc"  # first listing wins
+
+
+def test_parse_form_index_dedupes_co_registrants():
+    rule = "-" * 80
+    lines = [
+        "8-K         Parent Utility Inc                                            4           20261013    "
+        "edgar/data/4/0000000004-26-000011.txt",
+        "8-K         Parent Utility Operating Co                                   5           20261013    "
+        "edgar/data/5/0000000004-26-000011.txt",
+    ]
+    refs = parse_form_index("Form Type   Company Name\n" + rule + "\n" + "\n".join(lines) + "\n")
+    assert [(r.accession_no, r.cik) for r in refs] == [("0000000004-26-000011", "0000000004")]
