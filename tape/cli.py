@@ -15,7 +15,7 @@ from tape.config import Settings
 def _edgar(settings: Settings):
     from tape.edgar import Edgar
 
-    return Edgar(settings.user_agent)
+    return Edgar(settings.user_agent, cache_dir=settings.db_path.parent)
 
 
 def _jev():

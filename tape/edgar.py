@@ -6,11 +6,15 @@ identifies the caller. We stay at 5 per second.
 
 from __future__ import annotations
 
+import json
+import logging
+import os
 import re
 import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
+from pathlib import Path
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
@@ -28,6 +32,10 @@ FEED_URL = (
     "&start=0&count=100&output=atom"
 )
 TICKERS_URL = SEC + "/files/company_tickers.json"
+TICKERS_FILE = "company_tickers.json"
+TICKERS_MAX_AGE = 24 * 3600  # the SEC regenerates the file daily
+
+log = logging.getLogger(__name__)
 
 _TITLE = re.compile(r"^(?P<form>\S+) - (?P<company>.+?) \((?P<cik>\d{10})\)")
 _ACC = re.compile(r"(\d{10}-\d{2}-\d{6})")
@@ -61,7 +69,9 @@ class Throttle:
 
 
 class Edgar:
-    def __init__(self, user_agent: str, client: httpx.Client | None = None, per_second: float = 5.0) -> None:
+    def __init__(self, user_agent: str, client: httpx.Client | None = None, per_second: float = 5.0,
+                 cache_dir: Path | None = None) -> None:
+        self._cache_dir = cache_dir
         self._client = client or httpx.Client(timeout=20.0, follow_redirects=True)
         self._client.headers.update({"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"})
         self._throttle = Throttle(per_second)
@@ -99,12 +109,34 @@ class Edgar:
 
     def ticker_for(self, cik: str) -> str | None:
         if self._tickers is None:
-            data = self.get(TICKERS_URL).json()
             self._tickers = {}
-            for row in data.values():
+            for row in self._ticker_rows().values():
                 # First listing wins; it is usually the common stock.
                 self._tickers.setdefault(f"{int(row['cik_str']):010d}", row["ticker"])
         return self._tickers.get(cik)
+
+    def _ticker_rows(self) -> dict:
+        """The SEC ticker file, from the on-disk cache when it is less than a day old.
+
+        A scheduled pass runs every few minutes in a fresh process, so without the cache we
+        would download the same ~1 MB file a few hundred times a day. If the refresh fails we
+        fall back to a stale copy rather than losing tickers for the whole pass.
+        """
+        path = self._cache_dir / TICKERS_FILE if self._cache_dir is not None else None
+        cached = _read_json(path) if path is not None else None
+        if cached is not None and time.time() - path.stat().st_mtime < TICKERS_MAX_AGE:
+            return cached
+        try:
+            resp = self.get(TICKERS_URL)
+            data = resp.json()
+        except (httpx.HTTPError, ValueError):
+            if cached is None:
+                raise
+            log.warning("ticker map refresh failed; using stale cache at %s", path)
+            return cached
+        if path is not None:
+            _write_atomic(path, resp.text)
+        return data
 
     def fetch(self, ref: FilingRef, max_chars: int) -> Filing:
         index = parse_index_page(self.get(ref.index_url).text, ref.index_url)
@@ -121,6 +153,24 @@ class Edgar:
             ticker=self.ticker_for(ref.cik),
             clean_text=build_state_text(main_html, exhibit_html, max_chars),
         )
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Write via a temp file and rename so a concurrent reader never sees half a file."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(text)
+        os.replace(tmp, path)
+    except OSError:
+        log.warning("could not write ticker cache to %s", path, exc_info=True)
 
 
 # Parsers (pure functions, tested against saved pages) --------------------------------------
