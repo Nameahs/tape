@@ -66,3 +66,42 @@ def test_digest_window_compares_instants_not_strings(conn):
     db.set_route(conn, f.accession_no, "digest")
     assert len(db.digest_since(conn, "2026-10-14T00:30:00+00:00")) == 1
     assert db.digest_since(conn, "2026-10-14T01:30:00+00:00") == []
+
+
+def test_new_database_is_at_latest_schema_version(conn):
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(scores)")}
+    assert {"materiality_confidence", "event_confidence", "direction_confidence", "materiality_probs"} <= cols
+
+
+def test_migrates_a_version_zero_database_in_place(tmp_path):
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA)  # what a workspace created before any migrations looks like
+    old.execute(
+        "INSERT INTO filings (accession_no, cik, company, form, accepted_at, url) "
+        "VALUES ('a', '1', 'X', '8-K', 't', 'u')"
+    )
+    old.execute(
+        "INSERT INTO scores (accession_no, model, materiality, event, direction, surprise, boilerplate, raw_json) "
+        "VALUES ('a', 'm', 2.0, 'other', 'neutral', 0.1, 0.2, '{}')"
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    row = conn.execute("SELECT materiality, materiality_confidence FROM scores").fetchone()
+    assert (row["materiality"], row["materiality_confidence"]) == (2.0, None)
+    assert db.migrate(conn) == len(db.MIGRATIONS)  # idempotent on reconnect
+    conn.close()
+    assert db.connect(path).execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+
+
+def test_score_confidence_round_trips(conn):
+    f = make_filing()
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no, materiality_confidence=0.42, event_confidence=0.9,
+                                     direction_confidence=0.6, materiality_probs="[0.1, 0.2, 0.4, 0.2, 0.1]"))
+    row = conn.execute("SELECT * FROM scores").fetchone()
+    assert (row["materiality_confidence"], row["event_confidence"], row["direction_confidence"]) == (0.42, 0.9, 0.6)
+    assert row["materiality_probs"] == "[0.1, 0.2, 0.4, 0.2, 0.1]"
