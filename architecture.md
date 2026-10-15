@@ -79,7 +79,7 @@ Four SQLite tables, all keyed on the EDGAR accession number so every stage can b
 | Table | Key columns | Notes |
 | --- | --- | --- |
 | `filings` | accession_no (PK), cik, ticker, company, form, items, accepted_at (ET), url, clean_text | `accepted_at` decides the event day: after the 4:00 pm ET close counts toward the next trading day |
-| `scores` | accession_no, model, materiality, event, direction, surprise, boilerplate, raw_json, input_tokens, cost_usd, latency_ms, scored_at | Keeps the full Jev response so thresholds can be re-tuned without re-scoring |
+| `scores` | accession_no, model, materiality, event, direction, surprise, boilerplate, raw_json, input_tokens, cost_usd, latency_ms, scored_at, materiality/event/direction_confidence, materiality_probs | Keeps the full Jev response so thresholds can be re-tuned without re-scoring; confidence columns flag uncertain scores for review |
 | `briefs` | accession_no, route (now / digest / log), brief_text, sent_at | Only routed filings get a brief |
 | `outcomes` | accession_no, event_day, stock_return, market_return, abnormal_return, abs_abnormal_return | Filled by the evaluator once the next day's prices exist |
 

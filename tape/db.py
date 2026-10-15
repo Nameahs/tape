@@ -57,6 +57,20 @@ CREATE INDEX IF NOT EXISTS idx_filings_accepted ON filings(accepted_at);
 CREATE INDEX IF NOT EXISTS idx_briefs_route ON briefs(route, sent_at);
 """
 
+# Schema changes after the first release. SCHEMA above is version 0 and is never edited; each entry here
+# moves an existing database one version forward. PRAGMA user_version records how far a file has got, so
+# a workspace that predates a change picks it up the next time any command connects.
+MIGRATIONS: list[str] = [
+    # 1: Jev's confidence per answer, and the materiality level probabilities as a JSON list (levels 1..5),
+    # so uncertain scores can be reviewed or routed differently without re-parsing raw_json.
+    """
+    ALTER TABLE scores ADD COLUMN materiality_confidence REAL;
+    ALTER TABLE scores ADD COLUMN event_confidence REAL;
+    ALTER TABLE scores ADD COLUMN direction_confidence REAL;
+    ALTER TABLE scores ADD COLUMN materiality_probs TEXT;
+    """,
+]
+
 
 @dataclass(frozen=True)
 class Filing:
@@ -84,6 +98,10 @@ class ScoreRow:
     input_tokens: int | None = None
     cost_usd: float | None = None
     latency_ms: float | None = None
+    materiality_confidence: float | None = None
+    event_confidence: float | None = None
+    direction_confidence: float | None = None
+    materiality_probs: str | None = None  # JSON list, probability of levels 1..5
 
 
 def connect(path: Path | str) -> sqlite3.Connection:
@@ -95,7 +113,17 @@ def connect(path: Path | str) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
+    migrate(conn)
     return conn
+
+
+def migrate(conn: sqlite3.Connection) -> int:
+    """Apply any MIGRATIONS this database hasn't seen yet. Returns the resulting schema version."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    for target, script in enumerate(MIGRATIONS[version:], start=version + 1):
+        # executescript commits first, so wrap each step ourselves: a failed ALTER leaves the version alone.
+        conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {target};\nCOMMIT;")
+    return max(version, len(MIGRATIONS))
 
 
 @contextmanager
@@ -134,11 +162,13 @@ def upsert_score(conn: sqlite3.Connection, s: ScoreRow) -> None:
     conn.execute(
         """
         INSERT OR REPLACE INTO scores (accession_no, model, materiality, event, direction, surprise,
-            boilerplate, raw_json, input_tokens, cost_usd, latency_ms)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            boilerplate, raw_json, input_tokens, cost_usd, latency_ms, materiality_confidence,
+            event_confidence, direction_confidence, materiality_probs)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (s.accession_no, s.model, s.materiality, s.event, s.direction, s.surprise, s.boilerplate,
-         s.raw_json, s.input_tokens, s.cost_usd, s.latency_ms),
+         s.raw_json, s.input_tokens, s.cost_usd, s.latency_ms, s.materiality_confidence, s.event_confidence,
+         s.direction_confidence, s.materiality_probs),
     )
 
 
@@ -175,7 +205,7 @@ def pending_briefs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT f.accession_no, f.ticker, f.company, f.items, f.accepted_at, f.url,
-               s.materiality, s.event, s.direction, s.surprise
+               s.materiality, s.event, s.direction, s.surprise, s.materiality_confidence
         FROM briefs b JOIN filings f USING (accession_no) JOIN scores s USING (accession_no)
         WHERE b.route = 'now' AND b.brief_text IS NULL
         ORDER BY s.materiality DESC

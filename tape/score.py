@@ -79,6 +79,23 @@ def _raw_json(resp: Any) -> str:
     return dump() if callable(dump) else json.dumps(resp, default=str)
 
 
+def _confidence(answer: Any) -> float | None:
+    value = getattr(answer, "confidence", None)
+    return None if value is None else round(float(value), 4)
+
+
+def _level_probs(answer: Any) -> str | None:
+    """Materiality level probabilities as a JSON list ordered by level (index 0 is level 1).
+
+    The typed SDK keys them by int, the wire format by string; accept either.
+    """
+    probs = getattr(answer, "probabilities", None)
+    if not probs:
+        return None
+    ordered = sorted(probs.items(), key=lambda kv: int(kv[0]))
+    return json.dumps([round(float(p), 4) for _, p in ordered])
+
+
 def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float) -> ScoreRow:
     started = time.perf_counter()
     resp = client.system_one(state_for(row), QUESTIONS, model=model)
@@ -98,6 +115,10 @@ def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float)
         input_tokens=input_tokens,
         cost_usd=(input_tokens or 0) * price_per_m / 1_000_000,
         latency_ms=round(latency_ms, 1),
+        materiality_confidence=_confidence(a["materiality"]),
+        event_confidence=_confidence(a["event"]),
+        direction_confidence=_confidence(a["direction"]),
+        materiality_probs=_level_probs(a["materiality"]),
     )
 
 
