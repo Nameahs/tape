@@ -40,6 +40,7 @@ def test_unscored_and_pending_flow(conn):
     db.set_route(conn, b.accession_no, "log")
     pending = db.pending_briefs(conn)
     assert [r["accession_no"] for r in pending] == [a.accession_no]
+    assert "materiality_confidence" in pending[0].keys()
 
     db.save_brief(conn, a.accession_no, "Big news.", "2026-10-13T20:10:00Z")
     assert db.pending_briefs(conn) == []

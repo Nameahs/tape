@@ -1,3 +1,5 @@
+import json
+
 from typesafe_sdk import Choice, Noul, Score
 
 from tape import db
@@ -34,6 +36,21 @@ def test_score_one_maps_answers_and_cost(conn):
     assert s.surprise == 0.9
     assert s.cost_usd == 1000 * 0.042 / 1_000_000
     assert s.model == "jev-fake"
+    assert (s.materiality_confidence, s.event_confidence, s.direction_confidence) == (0.7, 0.9, 0.8)
+    assert json.loads(s.materiality_probs) == [0.0, 0.05, 0.1, 0.1, 0.75]
+
+
+def test_score_one_tolerates_answers_without_confidence(conn):
+    class Bare(FakeJev):
+        def system_one(self, state, questions, *, model=None):
+            resp = super().system_one(state, questions, model=model)
+            for answer in resp.answers.values():
+                vars(answer).pop("confidence", None)
+                vars(answer).pop("probabilities", None)
+            return resp
+
+    s = score_one(Bare(), _row(conn), "m", 0.042)
+    assert s.materiality_confidence is None and s.materiality_probs is None
 
 
 def test_score_many_skips_failures(conn):
@@ -44,8 +61,6 @@ def test_score_many_skips_failures(conn):
 
 def test_contract_with_real_sdk(conn):
     """Run the real TypeSafe client over a mock transport: request shape in, typed answers out."""
-    import json
-
     import httpx2
     from typesafe_sdk import TypeSafeClient
 
@@ -53,7 +68,7 @@ def test_contract_with_real_sdk(conn):
 
     def handler(request):
         sent.update(json.loads(request.content))
-        levels = {str(i): 0.2 for i in range(5)}
+        levels = {"4": 0.3, "0": 0.1, "1": 0.1, "2": 0.2, "3": 0.3}  # out of order on purpose
         return httpx2.Response(200, json={
             "model": "jev-1.13",
             "usage": {"input_tokens": 812, "output_tokens": 5},
@@ -75,3 +90,5 @@ def test_contract_with_real_sdk(conn):
     assert sent["state"]["items"] == ["2.02", "9.01"]
     assert (s.materiality, s.event, s.input_tokens) == (4.2, "mna", 812)
     assert '"jev-1.13"' in s.raw_json
+    assert (s.materiality_confidence, s.event_confidence, s.direction_confidence) == (0.8, 0.9, 0.7)
+    assert json.loads(s.materiality_probs) == [0.1, 0.1, 0.2, 0.3, 0.3]

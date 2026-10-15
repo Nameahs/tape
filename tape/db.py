@@ -205,7 +205,7 @@ def pending_briefs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
         SELECT f.accession_no, f.ticker, f.company, f.items, f.accepted_at, f.url,
-               s.materiality, s.event, s.direction, s.surprise
+               s.materiality, s.event, s.direction, s.surprise, s.materiality_confidence
         FROM briefs b JOIN filings f USING (accession_no) JOIN scores s USING (accession_no)
         WHERE b.route = 'now' AND b.brief_text IS NULL
         ORDER BY s.materiality DESC
