@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -114,8 +115,11 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
     eval_html = ('<p class="muted">No evaluation yet. Run <code>tape backfill</code> '
                  'then <code>tape evaluate</code>.</p>')
     if report:
-        tiles.append(_tile("Top 10% / bottom 50%", f"{report['gap_ratio']:.2f}x",
-                           f"random {report['random_gap_ratio']:.2f}x"))
+        gap_note = f"random {report['random_gap_ratio']:.2f}x"
+        low, high = report.get("gap_ci_low"), report.get("gap_ci_high")  # absent in older reports
+        if low is not None and high is not None and math.isfinite(low) and math.isfinite(high):
+            gap_note = f"90% CI {low:.2f}-{high:.2f}x, {gap_note}"
+        tiles.append(_tile("Top 10% / bottom 50%", f"{report['gap_ratio']:.2f}x", gap_note))
         tiles.append(_tile("Rank correlation", f"{report['spearman']:.2f}", f"random {report['random_spearman']:.2f}"))
         rows = "".join(
             f'<tr><td>{k}</td><td class="num">{v["n"]:,}</td><td class="num">{v["mean_abs_ar"]:.2%}</td></tr>'
