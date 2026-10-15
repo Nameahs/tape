@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from tape import db
-from tape.evaluate import compute_outcomes, evaluate, event_day, format_report, rule_flag, spearman
+from tape.evaluate import bootstrap_gap_ci, compute_outcomes, evaluate, event_day, format_report, rule_flag, spearman
 from tests.conftest import make_filing, make_score
 
 # Mon Oct 5 to Mon Oct 12, 2026; Fri Oct 9 traded, then the weekend.
@@ -71,7 +71,10 @@ def test_evaluate_detects_signal():
     assert abs(r.random_spearman) < 0.05 and r.random_gap_ratio == pytest.approx(1, abs=0.2)
     assert r.jev_lift_same_budget > r.rule_lift  # rule flags are random here
     assert set(r.by_score) <= {"1", "2", "3", "4", "5"}
-    assert "Spearman" in format_report(r)
+    assert r.gap_ci_low < r.gap_ratio < r.gap_ci_high
+    assert r.gap_ci_low > 1.5  # a real signal on 400 rows stays clear of 1x
+    text = format_report(r)
+    assert "Spearman" in text and "90% CI" in text
 
 
 def test_evaluate_without_signal_looks_random():
@@ -87,3 +90,17 @@ def test_evaluate_needs_enough_rows():
 def test_rule_flag_and_spearman():
     assert rule_flag(pd.Series(["2.02,9.01", "8.01", None])).tolist() == [True, False, False]
     assert spearman(pd.Series([1, 2, 3]), pd.Series([10, 20, 30])) == pytest.approx(1.0)
+
+
+def test_bootstrap_ci_narrows_with_more_data():
+    small, large = _frame(signal=2.0, n=100), _frame(signal=2.0, n=2000)
+    lo_s, hi_s = bootstrap_gap_ci(small["materiality"], small["abs_ar"])
+    lo_l, hi_l = bootstrap_gap_ci(large["materiality"], large["abs_ar"])
+    assert hi_l - lo_l < hi_s - lo_s
+
+
+def test_bootstrap_ci_is_deterministic_and_handles_zero_moves():
+    df = _frame(signal=1.0, n=200)
+    assert bootstrap_gap_ci(df["materiality"], df["abs_ar"]) == bootstrap_gap_ci(df["materiality"], df["abs_ar"])
+    lo, hi = bootstrap_gap_ci(df["materiality"], pd.Series(0.0, index=df.index))
+    assert np.isnan(lo) and np.isnan(hi)
