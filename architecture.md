@@ -44,7 +44,7 @@ Everything runs inside one Agent37 workspace. Plain Python does the repeatable w
 | Router | `tape/route.py` | Applies thresholds: brief now, add to the evening digest, or log only | Same job, after score |
 | Briefer | `skills/tape-brief.md` | Reads the full filing for routed items and writes a three-line brief | The Agent37 agent itself |
 | Notifier | `tape/notify.py` | Sends briefs and the digest to Telegram | Agent37's Telegram integration, or the Bot API fallback |
-| Store | `tape/db.py` | Filings, scores, briefs and price outcomes | A SQLite file in the workspace |
+| Store | `tape/db.py` | Filings, scores, briefs, price outcomes and a log of each pipeline pass | A SQLite file in the workspace |
 | Evaluator | `tape/evaluate.py` | Pulls prices, computes next-day abnormal returns, compares score groups and baselines | Nightly scheduled job, plus a one-time backfill |
 | Dashboard | `tape/dashboard.py` | One page: today's scored filings, mean move by score, cost per day | Static HTML rebuilt nightly |
 
