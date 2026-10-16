@@ -87,6 +87,13 @@ def cmd_digest(args, settings, conn) -> int:
     return 0
 
 
+def cmd_stats(args, settings, conn) -> int:
+    from tape.stats import collect, format_stats
+
+    print(format_stats(collect(conn, args.days)))
+    return 0
+
+
 def cmd_evaluate(args, settings, conn) -> int:
     from pathlib import Path
 
@@ -111,6 +118,13 @@ def cmd_dashboard(args, settings, conn) -> int:
     return 0
 
 
+def _positive_int(value: str) -> int:
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return n
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tape", description="SEC 8-K watcher scored by Jev")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -130,6 +144,9 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--hours", type=int, default=24)
     d.add_argument("--send", action="store_true", help="also send via Telegram Bot API")
     d.set_defaults(fn=cmd_digest)
+    st = sub.add_parser("stats", help="filings, scores, routes and Jev spend per day")
+    st.add_argument("--days", type=_positive_int, default=7)
+    st.set_defaults(fn=cmd_stats)
     e = sub.add_parser("evaluate", help="pull prices, compute abnormal returns, compare to baselines")
     e.add_argument("--skip-prices", action="store_true", help="use outcomes already stored")
     e.add_argument("--out", default="out/eval.json")

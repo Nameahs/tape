@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from tape import db
 from tape.cli import format_digest, main
 from tests.conftest import make_filing, make_score
@@ -37,3 +39,21 @@ def test_pending_brief_digest(tmp_path, monkeypatch, capsys):
 
 def test_format_digest_empty():
     assert "nothing material" in format_digest([])
+
+
+def test_stats_command(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+
+    assert main(["stats", "--days", "3"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].split()[:3] == ["day", "filings", "scored"]
+    assert len(lines) == 1 + 3 + 2  # header, one row per day, total, spend
+
+
+def test_stats_rejects_zero_days(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
+    with pytest.raises(SystemExit):
+        main(["stats", "--days", "0"])
+    assert "must be at least 1" in capsys.readouterr().err
