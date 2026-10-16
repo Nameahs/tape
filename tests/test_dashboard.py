@@ -32,6 +32,14 @@ def test_build_with_report(conn):
     assert html.count('class="bar"') == 3  # buckets 2 and 4 are absent
     assert "6.1%" in html  # bucket 5 label
     assert "Table view" in html
+    assert "90% CI" not in html  # reports written before the interval existed
+
+
+def test_build_shows_gap_interval(conn):
+    html = build(conn, {**REPORT, "gap_ci_low": 1.9, "gap_ci_high": 2.95}, NOW)
+    assert "90% CI 1.90-2.95x, random 1.00x" in html
+    html = build(conn, {**REPORT, "gap_ci_low": float("nan"), "gap_ci_high": float("nan")}, NOW)
+    assert "90% CI" not in html
 
 
 def test_build_without_report_or_data(conn):

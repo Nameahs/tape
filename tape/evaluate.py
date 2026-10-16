@@ -117,6 +117,8 @@ class Report:
     top10_mean: float
     bottom50_mean: float
     gap_ratio: float
+    gap_ci_low: float
+    gap_ci_high: float
     spearman: float
     hit_rate_top10_daily: float
     random_gap_ratio: float
@@ -138,6 +140,32 @@ def _gap(score: pd.Series, move: pd.Series) -> float:
     top = move.loc[order[: max(1, n // 10)]].mean()
     bottom = move.loc[order[n // 2:]].mean()
     return float(top / bottom) if bottom else float("nan")
+
+
+def bootstrap_gap_ci(score: pd.Series, move: pd.Series, resamples: int = 1000, level: float = 0.90,
+                     seed: int = 7) -> tuple[float, float]:
+    """Percentile bootstrap interval for the top-10% / bottom-50% gap ratio.
+
+    Rows are resampled with replacement, so a backfill of a few hundred filings shows how much
+    the headline ratio could move on a different sample of the same size.
+    """
+    s, m = score.to_numpy(dtype=float), move.to_numpy(dtype=float)
+    n = len(s)
+    top_n, bottom_start = max(1, n // 10), n // 2
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n, size=(resamples, n))
+    order = np.argsort(-s[idx], axis=1, kind="stable")
+    ranked = np.take_along_axis(m[idx], order, axis=1)
+    top = ranked[:, :top_n].mean(axis=1)
+    bottom = ranked[:, bottom_start:].mean(axis=1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        gaps = np.where(bottom > 0, top / bottom, np.nan)
+    gaps = gaps[np.isfinite(gaps)]
+    if not len(gaps):
+        return float("nan"), float("nan")
+    tail = (1 - level) / 2 * 100
+    low, high = np.percentile(gaps, [tail, 100 - tail])
+    return float(low), float(high)
 
 
 def _lift(flag: pd.Series, move: pd.Series) -> float:
@@ -177,6 +205,8 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
     jev_flag = pd.Series(False, index=df.index)
     jev_flag.loc[order[:k]] = True
 
+    ci_low, ci_high = bootstrap_gap_ci(score, move, seed=seed)
+
     by_event = {
         ev: {
             "n": int(len(g)),
@@ -192,6 +222,8 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
         top10_mean=float(move.loc[order[: max(1, n // 10)]].mean()),
         bottom50_mean=float(move.loc[order[n // 2:]].mean()),
         gap_ratio=_gap(score, move),
+        gap_ci_low=ci_low,
+        gap_ci_high=ci_high,
         spearman=spearman(score, move),
         hit_rate_top10_daily=float(np.mean(daily_hits)),
         random_gap_ratio=float(np.nanmean(rand_gaps)),
@@ -213,7 +245,7 @@ def format_report(r: Report) -> str:
         *(f"  {k}: {v['mean_abs_ar']:.2%}  (n={v['n']})" for k, v in sorted(r.by_score.items())),
         "",
         f"Top 10% vs bottom 50%:  {r.top10_mean:.2%} vs {r.bottom50_mean:.2%}  = {r.gap_ratio:.2f}x"
-        f"  (random {r.random_gap_ratio:.2f}x)",
+        f"  (90% CI {r.gap_ci_low:.2f}-{r.gap_ci_high:.2f}x; random {r.random_gap_ratio:.2f}x)",
         f"Spearman score vs move: {r.spearman:.3f}  (random {r.random_spearman:.3f})",
         f"Top-10 daily picks moving > {BIG_MOVE:.0%}: {r.hit_rate_top10_daily:.0%}",
         f"Item-code rule flags {r.rule_flagged}: lift {r.rule_lift:.2f}x; Jev top {r.rule_flagged}: "
