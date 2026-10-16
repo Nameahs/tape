@@ -1,5 +1,6 @@
 from datetime import date
 
+import pytest
 import respx
 
 from tape import db
@@ -43,3 +44,43 @@ def test_reroute_uses_new_thresholds(conn):
     run_pass(conn, Edgar("ua", per_second=1000), FakeJev(), Settings())
     strict = Settings(thresholds=Thresholds(brief_now=4.9, brief_now_with_surprise=4.9, digest=4.0))
     assert rescore_routes(conn, strict) == {"digest": 1}
+
+
+def _runs(conn):
+    return [dict(r) for r in conn.execute("SELECT * FROM runs ORDER BY id")]
+
+
+@respx.mock
+def test_each_pass_is_recorded(conn):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    edgar, settings = Edgar("ua", per_second=1000), Settings()
+    first = run_pass(conn, edgar, FakeJev(), settings)
+    run_pass(conn, edgar, FakeJev(), settings)
+
+    runs = _runs(conn)
+    assert [(r["kind"], r["discovered"], r["fetched"], r["scored"], r["routed_now"]) for r in runs] == [
+        ("pass", 1, 1, 1, 1), ("pass", 1, 0, 0, 0),
+    ]
+    assert runs[0]["cost_usd"] == pytest.approx(first.cost_usd)
+    assert all(r["finished_at"] and r["error"] is None for r in runs)
+
+
+@respx.mock
+def test_backfill_is_one_run(conn):
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.{}.idx"
+    respx.get(idx.format("20261009")).respond(200, text=(FIX / "form.idx").read_text())
+    _mock_filing(respx)
+    backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=3, end=date(2026, 10, 12))
+    assert [(r["kind"], r["scored"]) for r in _runs(conn)] == [("backfill", 1)]
+
+
+def test_failed_pass_records_error_and_reraises(conn):
+    class DownEdgar:
+        def latest_8k(self):
+            raise ConnectionError("EDGAR unreachable")
+
+    with pytest.raises(ConnectionError):
+        run_pass(conn, DownEdgar(), FakeJev(), Settings())
+    (run,) = _runs(conn)
+    assert run["finished_at"] and run["error"] == "ConnectionError: EDGAR unreachable"

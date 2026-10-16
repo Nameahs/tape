@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCHEMA = """
@@ -68,6 +69,26 @@ MIGRATIONS: list[str] = [
     ALTER TABLE scores ADD COLUMN event_confidence REAL;
     ALTER TABLE scores ADD COLUMN direction_confidence REAL;
     ALTER TABLE scores ADD COLUMN materiality_probs TEXT;
+    """,
+    # 2: one row per pipeline pass or backfill. finished_at stays NULL if the process died mid-pass, so gaps
+    # and crashes are visible; error holds the exception when a pass failed but could record it.
+    """
+    CREATE TABLE runs (
+        id           INTEGER PRIMARY KEY,
+        kind         TEXT NOT NULL CHECK (kind IN ('pass', 'backfill')),
+        started_at   TEXT NOT NULL,
+        finished_at  TEXT,
+        discovered   INTEGER NOT NULL DEFAULT 0,
+        fetched      INTEGER NOT NULL DEFAULT 0,
+        fetch_errors INTEGER NOT NULL DEFAULT 0,
+        scored       INTEGER NOT NULL DEFAULT 0,
+        routed_now   INTEGER NOT NULL DEFAULT 0,
+        routed_digest INTEGER NOT NULL DEFAULT 0,
+        routed_log   INTEGER NOT NULL DEFAULT 0,
+        cost_usd     REAL NOT NULL DEFAULT 0,
+        error        TEXT
+    );
+    CREATE INDEX idx_runs_started ON runs(started_at);
     """,
 ]
 
@@ -189,6 +210,32 @@ def save_brief(conn: sqlite3.Connection, accession_no: str, text: str, sent_at: 
     ).rowcount
     if not updated:
         raise KeyError(f"no routed filing {accession_no}")
+
+
+def _utc_now() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def start_run(conn: sqlite3.Connection, kind: str, started_at: str | None = None) -> int:
+    with transaction(conn):
+        cur = conn.execute("INSERT INTO runs (kind, started_at) VALUES (?, ?)", (kind, started_at or _utc_now()))
+    return int(cur.lastrowid)
+
+
+def finish_run(conn: sqlite3.Connection, run_id: int, *, discovered: int = 0, fetched: int = 0,
+               fetch_errors: int = 0, scored: int = 0, routes: Mapping[str, int] | None = None,
+               cost_usd: float = 0.0, error: str | None = None, finished_at: str | None = None) -> None:
+    routes = routes or {}
+    with transaction(conn):
+        conn.execute(
+            """
+            UPDATE runs SET finished_at = ?, discovered = ?, fetched = ?, fetch_errors = ?, scored = ?,
+                routed_now = ?, routed_digest = ?, routed_log = ?, cost_usd = ?, error = ?
+            WHERE id = ?
+            """,
+            (finished_at or _utc_now(), discovered, fetched, fetch_errors, scored, routes.get("now", 0),
+             routes.get("digest", 0), routes.get("log", 0), cost_usd, error, run_id),
+        )
 
 
 def unscored(conn: sqlite3.Connection) -> list[sqlite3.Row]:

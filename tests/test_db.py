@@ -106,3 +106,23 @@ def test_score_confidence_round_trips(conn):
     row = conn.execute("SELECT * FROM scores").fetchone()
     assert (row["materiality_confidence"], row["event_confidence"], row["direction_confidence"]) == (0.42, 0.9, 0.6)
     assert row["materiality_probs"] == "[0.1, 0.2, 0.4, 0.2, 0.1]"
+
+
+def test_run_lifecycle(conn):
+    run_id = db.start_run(conn, "pass", started_at="2026-10-15T14:00:00Z")
+    row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    assert (row["kind"], row["finished_at"], row["scored"]) == ("pass", None, 0)  # in flight, or crashed
+
+    db.finish_run(conn, run_id, discovered=5, fetched=4, fetch_errors=1, scored=4,
+                  routes={"now": 1, "log": 3}, cost_usd=0.012, finished_at="2026-10-15T14:00:09Z")
+    row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+    assert dict(row) | {"id": 0} == {
+        "id": 0, "kind": "pass", "started_at": "2026-10-15T14:00:00Z", "finished_at": "2026-10-15T14:00:09Z",
+        "discovered": 5, "fetched": 4, "fetch_errors": 1, "scored": 4, "routed_now": 1, "routed_digest": 0,
+        "routed_log": 3, "cost_usd": 0.012, "error": None,
+    }
+
+
+def test_run_kind_constraint(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        db.start_run(conn, "nightly")

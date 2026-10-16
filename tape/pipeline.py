@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -33,6 +34,27 @@ class PassStats:
             f"discovered={self.discovered} fetched={self.fetched} errors={self.fetch_errors} "
             f"scored={self.scored} now={r['now']} digest={r['digest']} log={r['log']} cost=${self.cost_usd:.4f}"
         )
+
+
+@contextmanager
+def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
+    """Yield fresh PassStats and store them in the runs table when the block ends, including on failure."""
+    stats = PassStats()
+    run_id = db.start_run(conn, kind)
+    error = None
+    try:
+        yield stats
+    except BaseException as e:
+        error = f"{type(e).__name__}: {e}"
+        raise
+    finally:
+        try:
+            db.finish_run(conn, run_id, discovered=stats.discovered, fetched=stats.fetched,
+                          fetch_errors=stats.fetch_errors, scored=stats.scored, routes=stats.routes,
+                          cost_usd=stats.cost_usd, error=error)
+        except Exception:
+            # Bookkeeping must never mask the pass's own result or exception.
+            log.exception("could not record run %s", run_id)
 
 
 def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], settings: Settings,
@@ -69,24 +91,24 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
 
 
 def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings) -> PassStats:
-    stats = PassStats()
-    ingest(conn, edgar, edgar.latest_8k(), settings, stats)
-    score_and_route(conn, jev, settings, stats)
+    with recorded(conn, "pass") as stats:
+        ingest(conn, edgar, edgar.latest_8k(), settings, stats)
+        score_and_route(conn, jev, settings, stats)
     return stats
 
 
 def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings,
              days: int, end: date | None = None) -> PassStats:
-    stats = PassStats()
     end = end or date.today()
-    for offset in range(days, 0, -1):
-        day = end - timedelta(days=offset)
-        if day.weekday() >= 5:
-            continue
-        ingest(conn, edgar, edgar.daily_8k(day), settings, stats)
-        # Score as we go so a long backfill can be interrupted without losing work.
-        score_and_route(conn, jev, settings, stats)
-        log.info("%s %s", day, stats.summary())
+    with recorded(conn, "backfill") as stats:
+        for offset in range(days, 0, -1):
+            day = end - timedelta(days=offset)
+            if day.weekday() >= 5:
+                continue
+            ingest(conn, edgar, edgar.daily_8k(day), settings, stats)
+            # Score as we go so a long backfill can be interrupted without losing work.
+            score_and_route(conn, jev, settings, stats)
+            log.info("%s %s", day, stats.summary())
     return stats
 
 
