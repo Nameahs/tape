@@ -9,6 +9,7 @@ NOW, DIGEST, LOG = "now", "digest", "log"
 
 
 def route(s: ScoreRow, t: Thresholds) -> str:
+    t = t.for_event(s.event)
     if s.boilerplate > t.boilerplate:
         return LOG
     if s.materiality >= t.brief_now:
