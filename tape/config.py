@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
 
@@ -21,6 +22,23 @@ class Thresholds:
     surprise: float = 0.7
     digest: float = 2.75
     boilerplate: float = 0.8
+    # Per-event overrides, e.g. {"earnings_guidance": {"brief_now": 4.5}}. Scheduled, frequent
+    # events such as earnings releases can need a stricter bar than the global one.
+    overrides: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        names = _cutoff_names()
+        for event, values in self.overrides.items():
+            unknown = set(values) - names
+            if unknown:
+                raise ValueError(f"unknown threshold(s) for {event}: {', '.join(sorted(unknown))}")
+
+    def for_event(self, event: str | None) -> Thresholds:
+        """The cutoffs that apply to one event label, with its overrides folded in."""
+        values = self.overrides.get(event or "")
+        if not values:
+            return self
+        return replace(self, overrides={}, **values)
 
     @classmethod
     def from_env(cls) -> Thresholds:
@@ -30,7 +48,30 @@ class Thresholds:
             surprise=_float("TAPE_SURPRISE", cls.surprise),
             digest=_float("TAPE_DIGEST", cls.digest),
             boilerplate=_float("TAPE_BOILERPLATE", cls.boilerplate),
+            overrides=_event_overrides(os.environ),
         )
+
+
+def _cutoff_names() -> set[str]:
+    return {f.name for f in fields(Thresholds) if f.name != "overrides"}
+
+
+def _event_overrides(env: Mapping[str, str]) -> dict[str, dict[str, float]]:
+    """Read TAPE_<CUTOFF>__<EVENT> variables, e.g. TAPE_BRIEF_NOW__EARNINGS_GUIDANCE=4.5."""
+    from tape.score import EVENTS
+
+    names = _cutoff_names()
+    out: dict[str, dict[str, float]] = {}
+    for key, raw in env.items():
+        if not key.startswith("TAPE_") or "__" not in key or not raw.strip():
+            continue
+        cutoff, _, event = key.removeprefix("TAPE_").lower().partition("__")
+        if cutoff not in names:
+            continue
+        if event not in EVENTS:
+            raise ValueError(f"{key}: unknown event {event!r}; expected one of {', '.join(EVENTS)}")
+        out.setdefault(event, {})[cutoff] = float(raw)
+    return out
 
 
 @dataclass(frozen=True)

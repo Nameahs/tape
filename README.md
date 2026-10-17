@@ -44,6 +44,7 @@ tape dashboard           # writes out/dashboard.html
 | `TAPE_JEV_MODEL` | `jev-latest` | Jev model name |
 | `TAPE_MAX_CHARS` | `12000` | Filing characters sent to Jev |
 | `TAPE_BRIEF_NOW`, `TAPE_DIGEST`, ... | see `tape/config.py` | Router thresholds |
+| `TAPE_<THRESHOLD>__<EVENT>` | none | Per-event override, e.g. `TAPE_BRIEF_NOW__EARNINGS_GUIDANCE=4.5`; event labels are the keys of `EVENTS` in `tape/score.py` |
 
 ## Development
 

@@ -70,6 +70,9 @@ Jev's score primitive returns an expected score from 0 to 4 for a five-level rub
 - **Evening digest:** materiality of 2.75 or more.
 - **Log only:** everything else, including any filing with `boilerplate` above 0.8.
 
+Any cutoff can be overridden for one event label (for example a stricter brief-now bar for
+`earnings_guidance`, which is scheduled and frequent) with `TAPE_<THRESHOLD>__<EVENT>`.
+
 Jev answers in roughly 70 to 500 ms and input costs $0.042 per million tokens, with output free ([Builder.io](https://www.builder.io/blog/what-is-jev)). At roughly 300 filings a day and about 2,000 tokens each, scoring costs a few cents a day.
 
 ## Data model
