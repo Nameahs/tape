@@ -48,11 +48,30 @@ class Thresholds:
             surprise=_float("TAPE_SURPRISE", cls.surprise),
             digest=_float("TAPE_DIGEST", cls.digest),
             boilerplate=_float("TAPE_BOILERPLATE", cls.boilerplate),
+            overrides=_event_overrides(os.environ),
         )
 
 
 def _cutoff_names() -> set[str]:
     return {f.name for f in fields(Thresholds) if f.name != "overrides"}
+
+
+def _event_overrides(env: Mapping[str, str]) -> dict[str, dict[str, float]]:
+    """Read TAPE_<CUTOFF>__<EVENT> variables, e.g. TAPE_BRIEF_NOW__EARNINGS_GUIDANCE=4.5."""
+    from tape.score import EVENTS
+
+    names = _cutoff_names()
+    out: dict[str, dict[str, float]] = {}
+    for key, raw in env.items():
+        if not key.startswith("TAPE_") or "__" not in key or not raw.strip():
+            continue
+        cutoff, _, event = key.removeprefix("TAPE_").lower().partition("__")
+        if cutoff not in names:
+            continue
+        if event not in EVENTS:
+            raise ValueError(f"{key}: unknown event {event!r}; expected one of {', '.join(EVENTS)}")
+        out.setdefault(event, {})[cutoff] = float(raw)
+    return out
 
 
 @dataclass(frozen=True)
