@@ -84,6 +84,9 @@ class Settings:
     max_chars: int = 12_000
     # USD per million input tokens. Output tokens are free.
     jev_input_price_per_m: float = 0.042
+    # Retries per filing for transient Jev errors, and the total seconds spent on one filing.
+    jev_max_retries: int = 4
+    jev_retry_budget_s: float = 60.0
     thresholds: Thresholds = field(default_factory=Thresholds)
 
     @classmethod
@@ -94,5 +97,7 @@ class Settings:
             jev_model=os.environ.get("TAPE_JEV_MODEL", cls.jev_model),
             max_chars=int(_float("TAPE_MAX_CHARS", cls.max_chars)),
             jev_input_price_per_m=_float("TAPE_JEV_PRICE_PER_M", cls.jev_input_price_per_m),
+            jev_max_retries=int(_float("TAPE_JEV_MAX_RETRIES", cls.jev_max_retries)),
+            jev_retry_budget_s=_float("TAPE_JEV_RETRY_BUDGET_S", cls.jev_retry_budget_s),
             thresholds=Thresholds.from_env(),
         )

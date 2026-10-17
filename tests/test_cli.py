@@ -57,3 +57,13 @@ def test_stats_rejects_zero_days(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         main(["stats", "--days", "0"])
     assert "must be at least 1" in capsys.readouterr().err
+
+
+def test_jev_client_gets_retry_settings(monkeypatch):
+    from tape import cli, score
+    from tape.config import Settings
+
+    seen = {}
+    monkeypatch.setattr(score, "default_client", lambda retry=None: seen.setdefault("retry", retry))
+    cli._jev(Settings(jev_max_retries=1, jev_retry_budget_s=10.0))
+    assert seen["retry"].max_retries == 1 and seen["retry"].timeout == 10.0

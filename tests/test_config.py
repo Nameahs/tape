@@ -36,3 +36,11 @@ def test_unrelated_double_underscore_vars_are_ignored(monkeypatch):
     monkeypatch.setenv("TAPE_SOMETHING__ELSE", "x")
     monkeypatch.setenv("TAPE_DIGEST__MNA", "")
     assert Settings.from_env().thresholds.overrides == {}
+
+
+def test_jev_retry_settings_from_env(monkeypatch):
+    assert (Settings().jev_max_retries, Settings().jev_retry_budget_s) == (4, 60.0)
+    monkeypatch.setenv("TAPE_JEV_MAX_RETRIES", "0")
+    monkeypatch.setenv("TAPE_JEV_RETRY_BUDGET_S", "15")
+    s = Settings.from_env()
+    assert (s.jev_max_retries, s.jev_retry_budget_s) == (0, 15.0)
