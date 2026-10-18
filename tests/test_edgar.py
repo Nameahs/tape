@@ -85,6 +85,33 @@ def test_transport_error_raised_after_last_attempt(monkeypatch):
     assert route.call_count == 4
 
 @respx.mock
+def test_honours_retry_after(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("tape.edgar.Throttle.wait", lambda self: None)
+    monkeypatch.setattr("tape.edgar.time.sleep", sleeps.append)
+    route = respx.get(FEED_URL)
+    route.side_effect = [
+        httpx.Response(503, headers={"Retry-After": "7"}),
+        httpx.Response(429, headers={"Retry-After": "3600"}),
+        httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+        httpx.Response(200, text=(FIX / "feed.atom").read_text()),
+    ]
+    assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
+    assert sleeps == [7.0, 60.0, 4.0]  # as asked, capped, then backoff for a date we don't parse
+
+
+@respx.mock
+def test_gives_up_on_429_without_a_final_sleep(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("tape.edgar.Throttle.wait", lambda self: None)
+    monkeypatch.setattr("tape.edgar.time.sleep", sleeps.append)
+    route = respx.get(FEED_URL).respond(429)
+    with pytest.raises(httpx.HTTPStatusError):
+        Edgar("ua", per_second=1000).latest_8k()
+    assert route.call_count == 4
+    assert sleeps == [1.0, 2.0, 4.0]
+
+@respx.mock
 def test_daily_index_missing_on_weekend_is_empty():
     respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261011.idx").respond(404)
     assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 11)) == []

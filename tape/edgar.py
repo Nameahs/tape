@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -35,6 +36,7 @@ TICKERS_URL = SEC + "/files/company_tickers.json"
 TICKERS_FILE = "company_tickers.json"
 TICKERS_MAX_AGE = 24 * 3600  # the SEC regenerates the file daily
 MAX_ATTEMPTS = 4
+MAX_RETRY_AFTER = 60.0  # never wait longer than this on one Retry-After
 
 log = logging.getLogger(__name__)
 
@@ -90,14 +92,13 @@ class Edgar:
                 log.warning("EDGAR request failed, retrying: %s", url, exc_info=True)
                 time.sleep(2**attempt)
                 continue
-            # 429 and 503 mean slow down; back off and retry.
-            if resp.status_code in (429, 503):
-                time.sleep(2**attempt)
+            # 429 and 503 mean slow down; back off and retry, unless this was the last try.
+            if resp.status_code in (429, 503) and attempt < MAX_ATTEMPTS - 1:
+                time.sleep(_retry_delay(resp, attempt))
                 continue
             resp.raise_for_status()
             return resp
-        resp.raise_for_status()
-        return resp
+        raise AssertionError("unreachable")  # the last attempt always returns or raises
 
     # Discovery ---------------------------------------------------------------------------
 
@@ -162,6 +163,20 @@ class Edgar:
             ticker=self.ticker_for(ref.cik),
             clean_text=build_state_text(main_html, exhibit_html, max_chars),
         )
+
+
+def _retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before retrying: the server's Retry-After if it gave one, else backoff.
+
+    Only the delta-seconds form is honoured; an HTTP-date or garbage falls back to backoff.
+    """
+    try:
+        delay = float(resp.headers["Retry-After"])
+    except (KeyError, ValueError):
+        delay = math.nan
+    if not math.isfinite(delay):
+        return float(2**attempt)
+    return min(max(delay, 0.0), MAX_RETRY_AFTER)
 
 
 def _read_json(path: Path) -> dict | None:
