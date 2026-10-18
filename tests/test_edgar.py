@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 import httpx
+import pytest
 import respx
 
 from tape.edgar import FEED_URL, TICKERS_URL, Edgar, FilingRef, parse_feed, parse_form_index, parse_index_page
@@ -60,6 +61,28 @@ def test_retries_on_429(monkeypatch):
     route.side_effect = [httpx.Response(429), httpx.Response(200, text=(FIX / "feed.atom").read_text())]
     assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
 
+
+@respx.mock
+def test_retries_transport_errors(monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    route = respx.get(FEED_URL)
+    route.side_effect = [
+        httpx.ReadTimeout("slow"),
+        httpx.ConnectError("reset"),
+        httpx.Response(200, text=(FIX / "feed.atom").read_text()),
+    ]
+    assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
+    assert route.call_count == 3
+
+
+@respx.mock
+def test_transport_error_raised_after_last_attempt(monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    route = respx.get(FEED_URL)
+    route.side_effect = httpx.ConnectError("down")
+    with pytest.raises(httpx.ConnectError):
+        Edgar("ua", per_second=1000).latest_8k()
+    assert route.call_count == 4
 
 @respx.mock
 def test_daily_index_missing_on_weekend_is_empty():

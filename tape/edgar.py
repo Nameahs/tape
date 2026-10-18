@@ -34,6 +34,7 @@ FEED_URL = (
 TICKERS_URL = SEC + "/files/company_tickers.json"
 TICKERS_FILE = "company_tickers.json"
 TICKERS_MAX_AGE = 24 * 3600  # the SEC regenerates the file daily
+MAX_ATTEMPTS = 4
 
 log = logging.getLogger(__name__)
 
@@ -78,9 +79,17 @@ class Edgar:
         self._tickers: dict[str, str] | None = None
 
     def get(self, url: str) -> httpx.Response:
-        for attempt in range(4):
+        for attempt in range(MAX_ATTEMPTS):
             self._throttle.wait()
-            resp = self._client.get(url)
+            try:
+                resp = self._client.get(url)
+            except httpx.TransportError:
+                # Connection resets and read timeouts are usually a blip; one shouldn't fail a pass.
+                if attempt == MAX_ATTEMPTS - 1:
+                    raise
+                log.warning("EDGAR request failed, retrying: %s", url, exc_info=True)
+                time.sleep(2**attempt)
+                continue
             # 429 and 503 mean slow down; back off and retry.
             if resp.status_code in (429, 503):
                 time.sleep(2**attempt)
