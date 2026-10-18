@@ -134,7 +134,7 @@ class Edgar:
         """
         path = self._cache_dir / TICKERS_FILE if self._cache_dir is not None else None
         cached = _read_json(path) if path is not None else None
-        if cached is not None and time.time() - path.stat().st_mtime < TICKERS_MAX_AGE:
+        if path is not None and cached is not None and time.time() - path.stat().st_mtime < TICKERS_MAX_AGE:
             return cached
         try:
             resp = self.get(TICKERS_URL)
@@ -273,9 +273,10 @@ def parse_index_page(html: str, base_url: str) -> IndexPage:
             continue
         link = cells[2].find("a")
         doc_type = cells[3].get_text(strip=True).upper()
-        if link is None or not link.get("href"):
+        href = link.get("href") if link is not None else None
+        if not isinstance(href, str) or not href:
             continue
-        href = link["href"].replace("/ix?doc=", "")
+        href = href.replace("/ix?doc=", "")
         url = urljoin(base_url, href)
         if doc_type == "8-K" and main_url is None:
             main_url = url
