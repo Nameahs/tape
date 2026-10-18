@@ -53,4 +53,5 @@ tape dashboard           # writes out/dashboard.html
 ```bash
 pytest -q
 ruff check .
+mypy
 ```
