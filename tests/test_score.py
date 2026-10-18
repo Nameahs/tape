@@ -1,6 +1,7 @@
 import json
 
-from typesafe_sdk import Choice, Noul, Score
+import pytest
+from typesafe_sdk import Choice, Noul, Score, TypeSafeAPIError
 
 from tape import db
 from tape.score import EVENTS, MATERIALITY_LEVELS, QUESTIONS, score_many, score_one, state_for
@@ -92,3 +93,72 @@ def test_contract_with_real_sdk(conn):
     assert '"jev-1.13"' in s.raw_json
     assert (s.materiality_confidence, s.event_confidence, s.direction_confidence) == (0.8, 0.9, 0.7)
     assert json.loads(s.materiality_probs) == [0.1, 0.1, 0.2, 0.3, 0.3]
+
+
+def _counting_client(statuses, policy):
+    import httpx2
+    from typesafe_sdk import TypeSafeClient
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        status = statuses[min(len(calls), len(statuses)) - 1]
+        return httpx2.Response(status, json={"error": "nope"})
+
+    transport = httpx2.MockTransport(handler)
+    client = TypeSafeClient(api_key="k", base_url="https://jev.test", transport=transport, retry=policy)
+    return client, calls
+
+
+def _fast(**kw):
+    from dataclasses import replace
+
+    from tape.score import retry_policy
+
+    # Same retry rules, no sleeping in tests.
+    return replace(retry_policy(**kw), backoff_initial=0.0, backoff_max=0.0)
+
+
+def test_retry_policy_defaults_are_more_patient_than_the_sdk():
+    from typesafe_sdk import RetryPolicy
+
+    from tape.score import retry_policy
+
+    p, sdk = retry_policy(), RetryPolicy()
+    assert p.max_retries > sdk.max_retries and p.timeout > sdk.timeout
+    assert {429, 503} <= p.http_statuses and 400 not in p.http_statuses and 401 not in p.http_statuses
+    assert p.respect_retry_after and p.api_timeout_error and p.api_connection_error
+
+
+def test_rate_limits_are_retried_until_the_limit():
+    client, calls = _counting_client([429], _fast(max_retries=3))
+    with pytest.raises(TypeSafeAPIError, match="429"):
+        client.system_one("x", {"q": Noul(instructions="?")}, model="m")
+    assert len(calls) == 4
+
+
+def test_bad_requests_fail_without_retrying():
+    client, calls = _counting_client([400], _fast(max_retries=3))
+    with pytest.raises(TypeSafeAPIError, match="400"):
+        client.system_one("x", {"q": Noul(instructions="?")}, model="m")
+    assert len(calls) == 1
+
+
+def test_default_client_uses_tape_retry_policy(monkeypatch):
+    import typesafe_sdk
+
+    from tape.score import default_client, retry_policy
+
+    seen = {}
+
+    class Spy:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+    monkeypatch.setattr(typesafe_sdk, "TypeSafeClient", Spy)
+    default_client()
+    assert seen["retry"] == retry_policy()
+    custom = retry_policy(max_retries=1)
+    default_client(custom)
+    assert seen["retry"] is custom

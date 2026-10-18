@@ -18,10 +18,10 @@ def _edgar(settings: Settings):
     return Edgar(settings.user_agent, cache_dir=settings.db_path.parent)
 
 
-def _jev():
-    from tape.score import default_client
+def _jev(settings: Settings):
+    from tape.score import default_client, retry_policy
 
-    return default_client()
+    return default_client(retry_policy(settings.jev_max_retries, settings.jev_retry_budget_s))
 
 
 def cmd_init(args, settings, conn) -> int:
@@ -32,14 +32,14 @@ def cmd_init(args, settings, conn) -> int:
 def cmd_run(args, settings, conn) -> int:
     from tape.pipeline import run_pass
 
-    print(run_pass(conn, _edgar(settings), _jev(), settings).summary())
+    print(run_pass(conn, _edgar(settings), _jev(settings), settings).summary())
     return 0
 
 
 def cmd_backfill(args, settings, conn) -> int:
     from tape.pipeline import backfill
 
-    print(backfill(conn, _edgar(settings), _jev(), settings, args.days).summary())
+    print(backfill(conn, _edgar(settings), _jev(settings), settings, args.days).summary())
     return 0
 
 

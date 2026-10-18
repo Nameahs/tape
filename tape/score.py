@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol
 
-from typesafe_sdk import Choice, Noul, Score
+from typesafe_sdk import Choice, Noul, RetryPolicy, Score
 
 from tape.db import ScoreRow
 
@@ -138,7 +138,29 @@ def score_many(
         return [s for s in pool.map(safe, list(rows)) if s is not None]
 
 
-def default_client() -> SystemOneClient:
+# Status codes worth another attempt: request timeout, rate limit, and server-side failures.
+RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+
+def retry_policy(max_retries: int = 4, budget_s: float = 60.0) -> RetryPolicy:
+    """How hard to retry one filing before leaving it for the next pass.
+
+    The SDK default (2 retries, 5s max backoff, 30s budget) gives up quickly, and a pass scores
+    many filings in parallel, so a rate-limit burst would otherwise drop a whole batch. Back off
+    longer and honour Retry-After, but cap the total so one stuck filing can't stall the pass.
+    Other 4xx errors (bad request, auth) are not transient and fail on the first attempt.
+    """
+    return RetryPolicy(
+        max_retries=max_retries,
+        backoff_initial=1.0,
+        backoff_max=20.0,
+        http_statuses=set(RETRY_STATUSES),
+        timeout=budget_s,
+    )
+
+
+def default_client(retry: RetryPolicy | None = None) -> SystemOneClient:
     from typesafe_sdk import TypeSafeClient
 
-    return TypeSafeClient()  # reads TYPESAFE_API_KEY from the environment
+    # Reads TYPESAFE_API_KEY from the environment.
+    return TypeSafeClient(retry=retry or retry_policy())
