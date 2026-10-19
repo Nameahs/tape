@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
+DAILY_DAYS = 14
 
 CSS = """
 .viz-root { color-scheme: light; --surface-1:#fcfcfb; --surface-2:#f3f2ef; --rule:#e4e2dc;
@@ -94,6 +98,44 @@ def _recent(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def _daily(conn: sqlite3.Connection, now: datetime, days: int = DAILY_DAYS) -> list[tuple[date, int, float]]:
+    """(day, scores made, Jev cost) for the last `days` Eastern-time days, today included, oldest first.
+
+    Bucketed by when Jev was called (scored_at), not by the filing's date, so a backfill shows up as
+    spend on the day it ran. Days with no calls are present with zeros so gaps are visible.
+    """
+    today = now.astimezone(ET).date()
+    first = today - timedelta(days=days - 1)
+    start_utc = datetime.combine(first, time(), ET).astimezone(UTC)
+    buckets = {first + timedelta(days=i): [0, 0.0] for i in range(days)}
+    rows = conn.execute(
+        "SELECT scored_at, cost_usd FROM scores WHERE julianday(scored_at) >= julianday(?)",
+        (start_utc.isoformat(),),
+    )
+    for r in rows:
+        b = buckets.get(datetime.fromisoformat(r["scored_at"]).astimezone(ET).date())
+        if b is not None:
+            b[0] += 1
+            b[1] += r["cost_usd"] or 0.0
+    return [(d, int(n), float(c)) for d, (n, c) in sorted(buckets.items())]
+
+
+def _daily_table(daily: list[tuple[date, int, float]]) -> str:
+    if not any(n for _, n, _ in daily):
+        return f'<p class="muted">No Jev calls in the last {len(daily)} days.</p>'
+    rows = "".join(
+        f'<tr><td>{d:%a %b %d}</td><td class="num">{n:,}</td><td class="num">${c:.4f}</td></tr>'
+        for d, n, c in reversed(daily)
+    )
+    total_n = sum(n for _, n, _ in daily)
+    total_c = sum(c for _, _, c in daily)
+    return ('<div class="scroll"><table>'
+            '<tr><th>Day (ET)</th><th class="num">Scored</th><th class="num">Jev cost</th></tr>'
+            + rows
+            + f'<tr><th>Total</th><th class="num">{total_n:,}</th><th class="num">${total_c:.4f}</th></tr>'
+            '</table></div>')
+
+
 def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=24)).isoformat()
@@ -153,6 +195,8 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
 <div class="tiles">{"".join(tiles)}</div>
 <h2>Does a higher score mean a bigger move?</h2>
 {eval_html}
+<h2>Jev volume and cost, last {DAILY_DAYS} days</h2>
+{_daily_table(_daily(conn, now))}
 <h2>Highest-scored filings, last 24 hours</h2>
 <div class="scroll"><table>
 <tr><th class="num">Score</th><th>Ticker</th><th>Company</th><th>Event</th><th>Direction</th><th>Route</th></tr>
