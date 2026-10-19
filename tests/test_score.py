@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 
 import pytest
 from typesafe_sdk import Choice, Noul, Score, TypeSafeAPIError
@@ -79,6 +80,25 @@ def test_score_many_yields_before_the_batch_finishes(conn):
     assert released_early, "first result only arrived once the slow filing finished"
     assert first.accession_no == rows[1]["accession_no"]
     assert [s.accession_no for s in rest] == [rows[0]["accession_no"]]
+
+
+def test_score_many_stops_sending_when_the_caller_stops(conn):
+    release = threading.Event()
+
+    class Blocking(FakeJev):
+        def system_one(self, state, questions, *, model=None):
+            if "second" in state["text"]:
+                release.wait(timeout=1)
+            return super().system_one(state, questions, model=model)
+
+    jev = Blocking()
+    rows = [_row(conn, n, clean_text=text) for n, text in enumerate(["first", "second", "third"], 1)]
+    results = score_many(jev, rows, "m", 0.042, workers=1)
+    assert next(results).accession_no == rows[0]["accession_no"]
+    results.close()  # what a KeyboardInterrupt in the caller's loop does to the generator
+    release.set()
+    time.sleep(0.1)
+    assert [state["text"] for state, _, _ in jev.calls] == ["first", "second"]
 
 
 def test_contract_with_real_sdk(conn):

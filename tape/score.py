@@ -138,11 +138,17 @@ def score_many(
             log.exception("scoring failed for %s", row["accession_no"])
             return None
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
         for future in as_completed([pool.submit(safe, row) for row in rows]):
             result = future.result()
             if result is not None:
                 yield result
+    finally:
+        # If the caller stops early (Ctrl-C, job timeout, an exception while storing), drop the
+        # filings not yet sent rather than waiting for and paying for the rest of the batch.
+        # Calls already in flight finish in the background; their results are discarded.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 # Status codes worth another attempt: request timeout, rate limit, and server-side failures.
