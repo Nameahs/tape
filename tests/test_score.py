@@ -83,11 +83,12 @@ def test_score_many_yields_before_the_batch_finishes(conn):
 
 
 def test_score_many_stops_sending_when_the_caller_stops(conn):
-    release = threading.Event()
+    started, release = threading.Event(), threading.Event()
 
     class Blocking(FakeJev):
         def system_one(self, state, questions, *, model=None):
             if "second" in state["text"]:
+                started.set()
                 release.wait(timeout=1)
             return super().system_one(state, questions, model=model)
 
@@ -95,6 +96,7 @@ def test_score_many_stops_sending_when_the_caller_stops(conn):
     rows = [_row(conn, n, clean_text=text) for n, text in enumerate(["first", "second", "third"], 1)]
     results = score_many(jev, rows, "m", 0.042, workers=1)
     assert next(results).accession_no == rows[0]["accession_no"]
+    assert started.wait(timeout=1)  # the second filing is in flight, the third still queued
     results.close()  # what a KeyboardInterrupt in the caller's loop does to the generator
     release.set()
     time.sleep(0.1)
