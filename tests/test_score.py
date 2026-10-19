@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 from typesafe_sdk import Choice, Noul, Score, TypeSafeAPIError
@@ -56,8 +57,28 @@ def test_score_one_tolerates_answers_without_confidence(conn):
 
 def test_score_many_skips_failures(conn):
     rows = [_row(conn, 1, clean_text="fine"), _row(conn, 2, clean_text="explode please")]
-    out = score_many(FakeJev(fail_on={"explode"}), rows, "m", 0.042, workers=2)
+    out = list(score_many(FakeJev(fail_on={"explode"}), rows, "m", 0.042, workers=2))
     assert [s.accession_no for s in out] == [rows[0]["accession_no"]]
+
+
+def test_score_many_yields_before_the_batch_finishes(conn):
+    release = threading.Event()
+
+    class Slow(FakeJev):
+        def system_one(self, state, questions, *, model=None):
+            if "slow" in state["text"]:
+                release.wait(timeout=2)
+            return super().system_one(state, questions, model=model)
+
+    rows = [_row(conn, 1, clean_text="slow one"), _row(conn, 2, clean_text="quick one")]
+    results = score_many(Slow(), rows, "m", 0.042, workers=2)
+    first = next(results)
+    released_early = not release.is_set()
+    release.set()
+    rest = list(results)
+    assert released_early, "first result only arrived once the slow filing finished"
+    assert first.accession_no == rows[1]["accession_no"]
+    assert [s.accession_no for s in rest] == [rows[0]["accession_no"]]
 
 
 def test_contract_with_real_sdk(conn):
