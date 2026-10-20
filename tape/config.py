@@ -13,6 +13,19 @@ def _float(name: str, default: float) -> float:
     return _parse_float(name, raw) if raw else default
 
 
+def _int(name: str, default: int, minimum: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name}: expected a whole number, got {raw!r}") from None
+    if value < minimum:
+        raise ValueError(f"{name}: must be at least {minimum}, got {value}")
+    return value
+
+
 def _parse_float(name: str, raw: str) -> float:
     """Parse a number from the environment, naming the variable if it isn't one."""
     try:
@@ -103,9 +116,13 @@ class Settings:
             db_path=Path(os.environ.get("TAPE_DB_PATH", str(cls.db_path))),
             user_agent=os.environ.get("TAPE_USER_AGENT", cls.user_agent),
             jev_model=os.environ.get("TAPE_JEV_MODEL", cls.jev_model),
-            max_chars=int(_float("TAPE_MAX_CHARS", cls.max_chars)),
+            max_chars=_int("TAPE_MAX_CHARS", cls.max_chars, minimum=1),
             jev_input_price_per_m=_float("TAPE_JEV_PRICE_PER_M", cls.jev_input_price_per_m),
-            jev_max_retries=int(_float("TAPE_JEV_MAX_RETRIES", cls.jev_max_retries)),
+            jev_max_retries=_int("TAPE_JEV_MAX_RETRIES", cls.jev_max_retries, minimum=0),
             jev_retry_budget_s=_float("TAPE_JEV_RETRY_BUDGET_S", cls.jev_retry_budget_s),
             thresholds=Thresholds.from_env(),
         )
+
+    def __post_init__(self) -> None:
+        if self.jev_retry_budget_s <= 0:
+            raise ValueError(f"jev_retry_budget_s must be positive, got {self.jev_retry_budget_s}")
