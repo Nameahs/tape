@@ -44,3 +44,15 @@ def test_jev_retry_settings_from_env(monkeypatch):
     monkeypatch.setenv("TAPE_JEV_RETRY_BUDGET_S", "15")
     s = Settings.from_env()
     assert (s.jev_max_retries, s.jev_retry_budget_s) == (0, 15.0)
+
+
+def test_bad_number_names_the_variable(monkeypatch):
+    monkeypatch.setenv("TAPE_BRIEF_NOW", "high")
+    with pytest.raises(ValueError, match=r"TAPE_BRIEF_NOW: expected a number, got 'high'"):
+        Settings.from_env()
+
+
+def test_bad_event_override_names_the_variable(monkeypatch):
+    monkeypatch.setenv("TAPE_DIGEST__EARNINGS_GUIDANCE", "3,5")
+    with pytest.raises(ValueError, match=r"TAPE_DIGEST__EARNINGS_GUIDANCE: expected a number"):
+        Settings.from_env()

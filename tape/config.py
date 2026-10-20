@@ -10,7 +10,15 @@ from pathlib import Path
 
 def _float(name: str, default: float) -> float:
     raw = os.environ.get(name, "").strip()
-    return float(raw) if raw else default
+    return _parse_float(name, raw) if raw else default
+
+
+def _parse_float(name: str, raw: str) -> float:
+    """Parse a number from the environment, naming the variable if it isn't one."""
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(f"{name}: expected a number, got {raw!r}") from None
 
 
 @dataclass(frozen=True)
@@ -70,7 +78,7 @@ def _event_overrides(env: Mapping[str, str]) -> dict[str, dict[str, float]]:
             continue
         if event not in EVENTS:
             raise ValueError(f"{key}: unknown event {event!r}; expected one of {', '.join(EVENTS)}")
-        out.setdefault(event, {})[cutoff] = float(raw)
+        out.setdefault(event, {})[cutoff] = _parse_float(key, raw.strip())
     return out
 
 
