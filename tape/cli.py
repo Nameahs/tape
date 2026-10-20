@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from tape import db
 from tape.config import Settings
 
+log = logging.getLogger(__name__)
+
 
 def _edgar(settings: Settings):
     from tape.edgar import Edgar
@@ -79,11 +81,18 @@ def format_digest(rows) -> str:
 def cmd_digest(args, settings, conn) -> int:
     since = (datetime.now(UTC) - timedelta(hours=args.hours)).isoformat()
     text = format_digest(db.digest_since(conn, since))
+    # Print first so the digest reaches the job log even when delivery fails.
+    print(text)
     if args.send:
+        import httpx
+
         from tape.notify import send_telegram
 
-        send_telegram(text)
-    print(text)
+        try:
+            send_telegram(text)
+        except httpx.HTTPError as e:
+            log.error("digest not sent: Telegram request failed: %s", e)
+            return 1
     return 0
 
 

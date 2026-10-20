@@ -1,5 +1,6 @@
 import json
 
+import httpx
 import pytest
 
 from tape import db
@@ -67,3 +68,31 @@ def test_jev_client_gets_retry_settings(monkeypatch):
     monkeypatch.setattr(score, "default_client", lambda retry=None: seen.setdefault("retry", retry))
     cli._jev(Settings(jev_max_retries=1, jev_retry_budget_s=10.0))
     assert seen["retry"].max_retries == 1 and seen["retry"].timeout == 10.0
+
+
+def test_digest_send_delivers_printed_text(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    sent = []
+    monkeypatch.setattr("tape.notify.send_telegram", lambda text: sent.append(text) or 1)
+
+    assert main(["digest", "--send"]) == 0
+    out = capsys.readouterr().out
+    assert sent == [out.rstrip("\n")]
+
+
+def test_digest_send_failure_still_prints(tmp_path, monkeypatch, capsys, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+
+    def boom(text):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("tape.notify.send_telegram", boom)
+
+    assert main(["digest", "--send"]) == 1
+    assert "4.4  EXMP  mna" in capsys.readouterr().out
+    assert "digest not sent" in caplog.text
+    assert "connection refused" in caplog.text
