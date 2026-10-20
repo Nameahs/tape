@@ -84,3 +84,31 @@ def test_send_telegram_does_not_retry_other_errors(sleeps):
         send_telegram("hi", token="T", chat_id="42", client=httpx.Client())
     assert route.call_count == 1
     assert sleeps == []
+
+
+class _TrackingClient(httpx.Client):
+    instances: list["_TrackingClient"] = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _TrackingClient.instances.append(self)
+
+
+@respx.mock
+def test_send_telegram_closes_the_client_it_creates(monkeypatch):
+    _TrackingClient.instances.clear()
+    monkeypatch.setattr(notify.httpx, "Client", _TrackingClient)
+    respx.post(API.format(token="T")).respond(500)
+    with pytest.raises(httpx.HTTPStatusError):
+        send_telegram("hi", token="T", chat_id="42")
+    assert len(_TrackingClient.instances) == 1
+    assert _TrackingClient.instances[0].is_closed
+
+
+@respx.mock
+def test_send_telegram_leaves_a_passed_client_open():
+    respx.post(API.format(token="T")).respond(200, json={"ok": True})
+    client = httpx.Client()
+    send_telegram("hi", token="T", chat_id="42", client=client)
+    assert not client.is_closed
+    client.close()

@@ -32,14 +32,19 @@ def send_telegram(text: str, token: str | None = None, chat_id: str | None = Non
                   client: httpx.Client | None = None) -> int:
     token = token or os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = chat_id or os.environ["TELEGRAM_CHAT_ID"]
-    client = client or httpx.Client(timeout=15.0)
-    sent = 0
-    for part in chunks(text):
-        _post(client, API.format(token=token), {
-            "chat_id": chat_id, "text": part, "disable_web_page_preview": True,
-        })
-        sent += 1
-    return sent
+    owned = client is None
+    http = httpx.Client(timeout=15.0) if client is None else client
+    try:
+        sent = 0
+        for part in chunks(text):
+            _post(http, API.format(token=token), {
+                "chat_id": chat_id, "text": part, "disable_web_page_preview": True,
+            })
+            sent += 1
+        return sent
+    finally:
+        if owned:
+            http.close()
 
 
 def _post(client: httpx.Client, url: str, payload: dict[str, object]) -> httpx.Response:
