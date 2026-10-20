@@ -84,10 +84,16 @@ def cmd_digest(args, settings, conn) -> int:
     # Print first so the digest reaches the job log even when delivery fails.
     print(text)
     if args.send:
+        import os
+
         import httpx
 
         from tape.notify import send_telegram
 
+        missing = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.environ.get(k)]
+        if missing:
+            log.error("digest not sent: %s not set", " and ".join(missing))
+            return 1
         try:
             send_telegram(text)
         except httpx.HTTPError as e:

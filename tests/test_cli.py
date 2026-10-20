@@ -74,6 +74,8 @@ def test_digest_send_delivers_printed_text(tmp_path, monkeypatch, capsys):
     path = tmp_path / "t.db"
     monkeypatch.setenv("TAPE_DB_PATH", str(path))
     _seed(path)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
     sent = []
     monkeypatch.setattr("tape.notify.send_telegram", lambda text: sent.append(text) or 1)
 
@@ -86,6 +88,8 @@ def test_digest_send_failure_still_prints(tmp_path, monkeypatch, capsys, caplog)
     path = tmp_path / "t.db"
     monkeypatch.setenv("TAPE_DB_PATH", str(path))
     _seed(path)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
 
     def boom(text):
         raise httpx.ConnectError("connection refused")
@@ -96,3 +100,18 @@ def test_digest_send_failure_still_prints(tmp_path, monkeypatch, capsys, caplog)
     assert "4.4  EXMP  mna" in capsys.readouterr().out
     assert "digest not sent" in caplog.text
     assert "connection refused" in caplog.text
+
+
+def test_digest_send_without_credentials(tmp_path, monkeypatch, capsys, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    _seed(path)
+    called = []
+    monkeypatch.setattr("tape.notify.send_telegram", lambda text: called.append(text))
+
+    assert main(["digest", "--send"]) == 1
+    assert "4.4  EXMP  mna" in capsys.readouterr().out
+    assert called == []
+    assert "TELEGRAM_CHAT_ID not set" in caplog.text
