@@ -24,7 +24,7 @@ export TAPE_USER_AGENT="Tape you@example.com"    # the SEC requires a contact
 
 tape init                # create the SQLite store
 tape run                 # one pass: ingest new 8-Ks, score, route
-tape pending             # filings waiting for a brief (what the agent reads)
+tape pending             # filings from the last 24h waiting for a brief (what the agent reads)
 tape brief ACC --text .. # save a brief the agent wrote
 tape digest [--send]     # material filings from the last 24h (optionally to Telegram)
 tape stats [--days 7]    # filings, scores, routes and Jev spend per day
