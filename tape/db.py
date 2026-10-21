@@ -248,15 +248,20 @@ def unscored(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def pending_briefs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def pending_briefs(conn: sqlite3.Connection, since_iso: str | None = None) -> list[sqlite3.Row]:
+    """Filings routed 'now' with no brief yet. With `since_iso`, only those EDGAR accepted at or after it:
+    a backfill or reroute marks old filings 'now' too, and those are not news any more.
+    """
     return conn.execute(
         """
         SELECT f.accession_no, f.ticker, f.company, f.items, f.accepted_at, f.url,
                s.materiality, s.event, s.direction, s.surprise, s.materiality_confidence
         FROM briefs b JOIN filings f USING (accession_no) JOIN scores s USING (accession_no)
         WHERE b.route = 'now' AND b.brief_text IS NULL
+          AND (? IS NULL OR julianday(f.accepted_at) >= julianday(?))
         ORDER BY s.materiality DESC
-        """
+        """,
+        (since_iso, since_iso),
     ).fetchall()
 
 
