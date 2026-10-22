@@ -8,11 +8,11 @@ from collections import Counter
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from tape import db
 from tape.config import Settings
-from tape.edgar import Edgar, FilingRef
+from tape.edgar import ET, Edgar, FilingRef
 from tape.route import route
 from tape.score import SystemOneClient, score_many
 
@@ -97,9 +97,15 @@ def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
     return stats
 
 
+def today_et(now: datetime | None = None) -> date:
+    """Today on EDGAR's calendar. Daily indexes are keyed by Eastern-time business days, and the
+    host clock (UTC on Agent37) is a day ahead of New York every evening from 8pm ET."""
+    return (now or datetime.now(UTC)).astimezone(ET).date()
+
+
 def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings,
              days: int, end: date | None = None) -> PassStats:
-    end = end or date.today()
+    end = end or today_et()
     with recorded(conn, "backfill") as stats:
         for offset in range(days, 0, -1):
             day = end - timedelta(days=offset)
