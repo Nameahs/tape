@@ -36,3 +36,22 @@ def test_state_text_includes_exhibit_and_respects_budget():
     short = build_state_text(main, ex, max_chars=300)
     assert len(short) <= 300
     assert short.startswith("UNITED STATES")
+
+
+def _page(body: str) -> str:
+    return f"<html><body><p>{body}</p></body></html>"
+
+
+def test_state_text_uses_whole_budget_without_exhibit():
+    main = _page("Item 5.02 " + "word " * 400)
+    text = build_state_text(main, None, max_chars=600)
+    assert len(text) >= 590
+
+
+def test_state_text_gives_body_the_room_a_short_exhibit_leaves():
+    main = _page("Item 1.01 " + "word " * 400)
+    ex = _page("Short press release.")
+    text = build_state_text(main, ex, max_chars=600)
+    assert len(text) <= 600
+    assert text.endswith("Short press release.")
+    assert len(text) >= 590
