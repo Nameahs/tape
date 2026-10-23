@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from html import escape
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
+DAILY_DAYS = 14
 
 CSS = """
 .viz-root { color-scheme: light; --surface-1:#fcfcfb; --surface-2:#f3f2ef; --rule:#e4e2dc;
@@ -94,6 +98,81 @@ def _recent(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
     ).fetchall()
 
 
+def _daily(conn: sqlite3.Connection, now: datetime, days: int = DAILY_DAYS) -> list[tuple[date, int, float]]:
+    """(day, scores made, Jev cost) for the last `days` Eastern-time days, today included, oldest first.
+
+    Bucketed by when Jev was called (scored_at), not by the filing's date, so a backfill shows up as
+    spend on the day it ran. Days with no calls are present with zeros so gaps are visible.
+    """
+    today = now.astimezone(ET).date()
+    first = today - timedelta(days=days - 1)
+    start_utc = datetime.combine(first, time(), ET).astimezone(UTC)
+    buckets = {first + timedelta(days=i): [0, 0.0] for i in range(days)}
+    rows = conn.execute(
+        "SELECT scored_at, cost_usd FROM scores WHERE julianday(scored_at) >= julianday(?)",
+        (start_utc.isoformat(),),
+    )
+    for r in rows:
+        b = buckets.get(datetime.fromisoformat(r["scored_at"]).astimezone(ET).date())
+        if b is not None:
+            b[0] += 1
+            b[1] += r["cost_usd"] or 0.0
+    return [(d, int(n), float(c)) for d, (n, c) in sorted(buckets.items())]
+
+
+def _daily_chart(daily: list[tuple[date, int, float]]) -> str:
+    """Columns of Jev cost per day; hover shows the day's call count. Only the peak is labeled so
+    fourteen values don't crowd the bars."""
+    peak = max(c for _, _, c in daily)
+    if peak <= 0:
+        return ""
+    w, h, left, bottom, top = 640, 220, 56, 40, 24
+    plot_w, plot_h = w - left - 16, h - top - bottom
+    step = plot_w / len(daily)
+    bar_w = step * 0.64
+    base = top + plot_h
+    parts = [f'<svg class="chart" viewBox="0 0 {w} {h}" role="img" aria-label="Jev cost per day">']
+    for frac in (0.5, 1.0):
+        y = top + plot_h * (1 - frac)
+        parts.append(f'<line x1="{left}" x2="{w - 16}" y1="{y:.1f}" y2="{y:.1f}"/>'
+                     f'<text x="{left - 8}" y="{y + 4:.1f}" text-anchor="end">${peak * frac:.4f}</text>')
+    parts.append(f'<line x1="{left}" x2="{w - 16}" y1="{base}" y2="{base}"/>')
+    peak_i = max(range(len(daily)), key=lambda i: daily[i][2])
+    for i, (d, n, c) in enumerate(daily):
+        cx = left + step * i + step / 2
+        if i % 2 == (len(daily) - 1) % 2:  # every other day, always including today
+            parts.append(f'<text x="{cx:.1f}" y="{base + 18}" text-anchor="middle">{d:%m-%d}</text>')
+        if c <= 0:
+            continue
+        bh = max(2.0, plot_h * c / peak)
+        x, y = cx - bar_w / 2, base - bh
+        r = min(3.0, bh / 2, bar_w / 2)
+        d_attr = (f"M{x:.1f},{base}V{y + r:.1f}Q{x:.1f},{y:.1f} {x + r:.1f},{y:.1f}"
+                  f"H{x + bar_w - r:.1f}Q{x + bar_w:.1f},{y:.1f} {x + bar_w:.1f},{y + r:.1f}V{base}Z")
+        parts.append(f'<path class="bar" d="{d_attr}"><title>{d:%a %b %d}: ${c:.4f}, {n:,} calls</title></path>')
+        if i == peak_i:
+            parts.append(f'<text class="val" x="{cx:.1f}" y="{y - 6:.1f}" text-anchor="middle">${c:.4f}</text>')
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _daily_table(daily: list[tuple[date, int, float]]) -> str:
+    if not any(n for _, n, _ in daily):
+        return f'<p class="muted">No Jev calls in the last {len(daily)} days.</p>'
+    rows = "".join(
+        f'<tr><td>{d:%a %b %d}</td><td class="num">{n:,}</td><td class="num">${c:.4f}</td></tr>'
+        for d, n, c in reversed(daily)
+    )
+    total_n = sum(n for _, n, _ in daily)
+    total_c = sum(c for _, _, c in daily)
+    return (_daily_chart(daily)
+            + '<details><summary class="muted">Table view</summary><div class="scroll"><table>'
+            '<tr><th>Day (ET)</th><th class="num">Scored</th><th class="num">Jev cost</th></tr>'
+            + rows
+            + f'<tr><th>Total</th><th class="num">{total_n:,}</th><th class="num">${total_c:.4f}</th></tr>'
+            '</table></div></details>')
+
+
 def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=24)).isoformat()
@@ -153,6 +232,8 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
 <div class="tiles">{"".join(tiles)}</div>
 <h2>Does a higher score mean a bigger move?</h2>
 {eval_html}
+<h2>Jev volume and cost, last {DAILY_DAYS} days</h2>
+{_daily_table(_daily(conn, now))}
 <h2>Highest-scored filings, last 24 hours</h2>
 <div class="scroll"><table>
 <tr><th class="num">Score</th><th>Ticker</th><th>Company</th><th>Event</th><th>Direction</th><th>Route</th></tr>

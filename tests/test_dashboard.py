@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from tape import db
-from tape.dashboard import build, write
+from tape.dashboard import _daily, _daily_chart, build, write
 from tests.conftest import make_filing, make_score
 
 NOW = datetime(2026, 10, 13, 22, 0, tzinfo=UTC)
@@ -45,9 +45,58 @@ def test_build_shows_gap_interval(conn):
 def test_build_without_report_or_data(conn):
     html = build(conn, None, NOW)
     assert "No evaluation yet" in html and "Nothing scored" in html
+    assert "No Jev calls in the last 14 days" in html
 
 
 def test_write(conn, tmp_path):
     _seed(conn)
     out = write(conn, tmp_path / "d" / "dash.html", tmp_path / "missing.json")
     assert out.read_text().startswith("<!doctype html>")
+
+
+def _score_at(conn, n, scored_at, cost):
+    f = make_filing(n)
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no, cost_usd=cost))
+    conn.execute("UPDATE scores SET scored_at = ? WHERE accession_no = ?", (scored_at, f.accession_no))
+
+
+def test_daily_buckets_by_eastern_day_of_scoring(conn):
+    _score_at(conn, 1, "2026-10-13T21:00:00Z", 0.002)  # 17:00 ET on the 13th
+    _score_at(conn, 2, "2026-10-13T03:30:00Z", 0.001)  # 23:30 ET on the 12th
+    _score_at(conn, 3, "2026-10-13T04:30:00Z", None)   # 00:30 ET on the 13th, no cost recorded
+    _score_at(conn, 4, "2026-09-01T12:00:00Z", 0.5)    # outside the window
+    daily = _daily(conn, NOW)
+    assert len(daily) == 14
+    assert daily[0][0].isoformat() == "2026-09-30" and daily[-1][0].isoformat() == "2026-10-13"
+    by_day = {d.isoformat(): (n, round(c, 6)) for d, n, c in daily}
+    assert by_day["2026-10-13"] == (2, 0.002)
+    assert by_day["2026-10-12"] == (1, 0.001)
+    assert by_day["2026-10-11"] == (0, 0.0)
+
+
+def test_build_shows_daily_section(conn):
+    _score_at(conn, 1, "2026-10-13T21:00:00Z", 0.0025)
+    _score_at(conn, 2, "2026-10-10T15:00:00Z", 0.001)
+    html = build(conn, None, NOW)
+    assert "Jev volume and cost, last 14 days" in html
+    assert "<td>Tue Oct 13</td>" in html and "<td>Wed Oct 07</td>" in html  # empty days are listed
+    assert "$0.0035" in html  # window total
+
+
+def test_daily_chart(conn):
+    _score_at(conn, 1, "2026-10-13T21:00:00Z", 0.0025)
+    _score_at(conn, 2, "2026-10-10T15:00:00Z", 0.001)
+    _score_at(conn, 3, "2026-10-09T15:00:00Z", None)  # a call with no cost draws no bar
+    svg = _daily_chart(_daily(conn, NOW))
+    assert svg.count('class="bar"') == 2
+    assert "Tue Oct 13: $0.0025, 1 calls" in svg
+    assert svg.count('class="val"') == 1 and ">$0.0025</text>" in svg  # only the peak is labeled
+    assert ">10-13<" in svg and ">10-12<" not in svg  # alternate day labels, today always shown
+
+
+def test_daily_chart_empty_when_no_spend(conn):
+    _score_at(conn, 1, "2026-10-13T21:00:00Z", None)
+    assert _daily_chart(_daily(conn, NOW)) == ""
+    html = build(conn, None, NOW)
+    assert "Table view" in html and "No Jev calls" not in html  # calls but no recorded cost
