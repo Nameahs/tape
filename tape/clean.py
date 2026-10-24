@@ -58,9 +58,12 @@ def build_state_text(main_html: str, exhibit_html: str | None, max_chars: int) -
     text = "\n\n".join(parts)
     if len(text) <= max_chars:
         return text
-    # Keep the whole 8-K body if it fits in two thirds of the budget, then fill with the exhibit.
-    main_budget = min(len(main), (max_chars * 2) // 3)
+    # The 8-K body gets at least two thirds of the budget, plus whatever a short (or missing)
+    # exhibit leaves unused; the exhibit fills the rest.
+    exhibit = parts[1] if len(parts) > 1 else ""
+    exhibit_room = len(exhibit) + 2 if exhibit else 0
+    main_budget = min(len(main), max((max_chars * 2) // 3, max_chars - exhibit_room))
     head = main[:main_budget]
     rest = max_chars - len(head) - 2
-    tail = parts[1][:rest] if len(parts) > 1 and rest > 0 else ""
+    tail = exhibit[:rest] if exhibit and rest > 0 else ""
     return (head + "\n\n" + tail).strip()[:max_chars]
