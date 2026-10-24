@@ -26,6 +26,13 @@ def test_known_accessions(conn):
     assert db.known_accessions(conn, []) == set()
 
 
+def test_unscored_skips_missing_and_blank_text(conn):
+    keep = make_filing(1)
+    for f in (keep, make_filing(2, clean_text=None), make_filing(3, clean_text=""), make_filing(4, clean_text=" \n ")):
+        db.upsert_filing(conn, f)
+    assert [r["accession_no"] for r in db.unscored(conn)] == [keep.accession_no]
+
+
 def test_unscored_and_pending_flow(conn):
     a, b = make_filing(1), make_filing(2)
     db.upsert_filing(conn, a)
