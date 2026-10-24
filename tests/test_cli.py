@@ -38,6 +38,28 @@ def test_pending_brief_digest(tmp_path, monkeypatch, capsys):
     assert "4.4  EXMP  mna" in out
 
 
+def test_pending_skips_old_filings(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    conn = db.connect(path)
+    old = make_filing(1, accepted_at="2020-01-02T10:00:00-05:00")
+    db.upsert_filing(conn, old)
+    db.upsert_score(conn, make_score(old.accession_no, 4.9))
+    db.set_route(conn, old.accession_no, "now")
+    conn.commit()
+    conn.close()
+
+    assert main(["pending"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+    assert main(["pending", "--max-age-hours", "100000"]) == 0
+    assert [p["accession_no"] for p in json.loads(capsys.readouterr().out)] == [old.accession_no]
+
+
+def test_pending_rejects_zero_max_age(capsys):
+    with pytest.raises(SystemExit):
+        main(["pending", "--max-age-hours", "0"])
+
+
 def test_format_digest_empty():
     assert "nothing material" in format_digest([])
 
