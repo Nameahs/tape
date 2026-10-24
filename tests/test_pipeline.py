@@ -1,3 +1,4 @@
+import threading
 from datetime import UTC, date, datetime
 
 import pytest
@@ -6,7 +7,8 @@ import respx
 from tape import db, pipeline
 from tape.config import Settings, Thresholds
 from tape.edgar import FEED_URL, Edgar
-from tape.pipeline import backfill, rescore_routes, run_pass, today_et
+from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route, today_et
+from tests.conftest import make_filing
 from tests.fakes import FakeJev
 from tests.test_edgar import FIX, _mock_filing
 
@@ -100,3 +102,32 @@ def test_failed_pass_records_error_and_reraises(conn):
         run_pass(conn, DownEdgar(), FakeJev(), Settings())
     (run,) = _runs(conn)
     assert run["finished_at"] and run["error"] == "ConnectionError: EDGAR unreachable"
+
+
+def test_interrupted_scoring_keeps_scores_already_returned(conn, monkeypatch):
+    """A kill partway through a batch must not throw away (and re-bill) filings Jev already scored."""
+    stored = threading.Event()
+    upsert_score = db.upsert_score
+
+    def upsert_and_signal(c, s):
+        upsert_score(c, s)
+        stored.set()
+
+    monkeypatch.setattr(db, "upsert_score", upsert_and_signal)
+
+    class Interrupted(FakeJev):
+        def system_one(self, state, questions, *, model=None):
+            if "interrupt" in state["text"]:
+                stored.wait(timeout=2)
+                raise KeyboardInterrupt
+            return super().system_one(state, questions, model=model)
+
+    first, second = make_filing(1, clean_text="fine"), make_filing(2, clean_text="interrupt here")
+    for f in (first, second):
+        db.upsert_filing(conn, f)
+    conn.commit()
+
+    with pytest.raises(KeyboardInterrupt):
+        score_and_route(conn, Interrupted(), Settings(), PassStats())
+    assert [r["accession_no"] for r in conn.execute("SELECT accession_no FROM scores")] == [first.accession_no]
+    assert [r["accession_no"] for r in db.unscored(conn)] == [second.accession_no]

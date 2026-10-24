@@ -44,3 +44,42 @@ def test_jev_retry_settings_from_env(monkeypatch):
     monkeypatch.setenv("TAPE_JEV_RETRY_BUDGET_S", "15")
     s = Settings.from_env()
     assert (s.jev_max_retries, s.jev_retry_budget_s) == (0, 15.0)
+
+
+def test_bad_number_names_the_variable(monkeypatch):
+    monkeypatch.setenv("TAPE_BRIEF_NOW", "high")
+    with pytest.raises(ValueError, match=r"TAPE_BRIEF_NOW: expected a number, got 'high'"):
+        Settings.from_env()
+
+
+def test_bad_event_override_names_the_variable(monkeypatch):
+    monkeypatch.setenv("TAPE_DIGEST__EARNINGS_GUIDANCE", "3,5")
+    with pytest.raises(ValueError, match=r"TAPE_DIGEST__EARNINGS_GUIDANCE: expected a number"):
+        Settings.from_env()
+
+
+def test_int_settings_from_env(monkeypatch):
+    monkeypatch.setenv("TAPE_MAX_CHARS", "8000")
+    monkeypatch.setenv("TAPE_JEV_MAX_RETRIES", "0")
+    s = Settings.from_env()
+    assert (s.max_chars, s.jev_max_retries) == (8000, 0)
+
+
+@pytest.mark.parametrize("raw", ["2.9", "12k"])
+def test_int_setting_rejects_non_integers(monkeypatch, raw):
+    monkeypatch.setenv("TAPE_JEV_MAX_RETRIES", raw)
+    with pytest.raises(ValueError, match="TAPE_JEV_MAX_RETRIES: expected a whole number"):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize(("name", "raw"), [("TAPE_MAX_CHARS", "0"), ("TAPE_JEV_MAX_RETRIES", "-1")])
+def test_int_setting_rejects_out_of_range(monkeypatch, name, raw):
+    monkeypatch.setenv(name, raw)
+    with pytest.raises(ValueError, match=f"{name}: must be at least"):
+        Settings.from_env()
+
+
+def test_retry_budget_must_be_positive(monkeypatch):
+    monkeypatch.setenv("TAPE_JEV_RETRY_BUDGET_S", "0")
+    with pytest.raises(ValueError, match="jev_retry_budget_s must be positive"):
+        Settings.from_env()

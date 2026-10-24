@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterable
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Protocol
 
 from typesafe_sdk import Choice, Noul, RetryPolicy, Score
@@ -124,8 +124,12 @@ def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float)
 
 def score_many(
     client: SystemOneClient, rows: Iterable[Any], model: str, price_per_m: float, workers: int = 8
-) -> list[ScoreRow]:
-    """Score in parallel. A failed filing is logged and left unscored so the next pass retries it."""
+) -> Iterator[ScoreRow]:
+    """Score in parallel, yielding each result as soon as it finishes.
+
+    Callers store results as they arrive, so an interrupted batch keeps what it already paid for.
+    A failed filing is logged and left unscored so the next pass retries it.
+    """
 
     def safe(row: Any) -> ScoreRow | None:
         try:
@@ -134,8 +138,17 @@ def score_many(
             log.exception("scoring failed for %s", row["accession_no"])
             return None
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        return [s for s in pool.map(safe, list(rows)) if s is not None]
+    pool = ThreadPoolExecutor(max_workers=workers)
+    try:
+        for future in as_completed([pool.submit(safe, row) for row in rows]):
+            result = future.result()
+            if result is not None:
+                yield result
+    finally:
+        # If the caller stops early (Ctrl-C, job timeout, an exception while storing), drop the
+        # filings not yet sent rather than waiting for and paying for the rest of the batch.
+        # Calls already in flight finish in the background; their results are discarded.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 # Status codes worth another attempt: request timeout, rate limit, and server-side failures.

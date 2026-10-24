@@ -59,6 +59,25 @@ def test_stats_rejects_zero_days(tmp_path, monkeypatch, capsys):
     assert "must be at least 1" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["backfill", "--days", "0"],
+        ["backfill", "--days", "-5"],
+        ["digest", "--hours", "0"],
+        ["digest", "--hours", "-24"],
+    ],
+)
+def test_rejects_non_positive_windows_before_touching_store(argv, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+    assert "must be at least 1" in capsys.readouterr().err
+    assert not path.exists()
+
+
 def test_jev_client_gets_retry_settings(monkeypatch):
     from tape import cli, score
     from tape.config import Settings

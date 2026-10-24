@@ -19,7 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 prices = ["yfinance>=0.2"]
-dev = ["pytest>=8", "respx>=0.21", "ruff>=0.6"]
+dev = ["pytest>=8", "respx>=0.21", "ruff>=0.6", "mypy>=1.11"]
 
 [project.scripts]
 tape = "tape.cli:main"
@@ -33,6 +33,19 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["tape"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# No usable stubs: feedparser ships none, yfinance is an optional extra, and pandas-stubs
+# flags most of the evaluator's numeric code without catching real bugs.
+[[tool.mypy.overrides]]
+module = ["feedparser", "yfinance", "pandas", "pandas.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -219,7 +219,9 @@ def _utc_now() -> str:
 def start_run(conn: sqlite3.Connection, kind: str, started_at: str | None = None) -> int:
     with transaction(conn):
         cur = conn.execute("INSERT INTO runs (kind, started_at) VALUES (?, ?)", (kind, started_at or _utc_now()))
-    return int(cur.lastrowid)
+    if cur.lastrowid is None:
+        raise RuntimeError("runs insert returned no row id")
+    return cur.lastrowid
 
 
 def finish_run(conn: sqlite3.Connection, run_id: int, *, discovered: int = 0, fetched: int = 0,
