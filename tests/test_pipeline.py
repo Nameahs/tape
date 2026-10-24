@@ -10,7 +10,7 @@ from tape.edgar import FEED_URL, Edgar
 from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
-from tests.test_edgar import FIX, _mock_filing
+from tests.test_edgar import FIX, INDEX, _index_without_documents, _mock_filing
 
 
 @respx.mock
@@ -46,6 +46,25 @@ def test_reroute_uses_new_thresholds(conn):
     run_pass(conn, Edgar("ua", per_second=1000), FakeJev(), Settings())
     strict = Settings(thresholds=Thresholds(brief_now=4.9, brief_now_with_surprise=4.9, digest=4.0))
     assert rescore_routes(conn, strict) == {"digest": 1}
+
+
+@respx.mock
+def test_empty_filing_is_skipped_and_retried_later(conn):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    index = respx.get(INDEX)
+    index.respond(200, text=_index_without_documents())
+    edgar, jev, settings = Edgar("ua", per_second=1000), FakeJev(), Settings()
+
+    stats = run_pass(conn, edgar, jev, settings)
+    assert (stats.fetched, stats.fetch_errors, stats.scored) == (0, 1, 0)
+    assert jev.calls == []
+    assert conn.execute("SELECT COUNT(*) FROM filings").fetchone()[0] == 0
+
+    # Once EDGAR serves the full index page, the next pass picks the filing up.
+    index.respond(200, text=(FIX / "index.htm").read_text())
+    again = run_pass(conn, edgar, jev, settings)
+    assert (again.fetched, again.scored) == (1, 1)
 
 
 def _runs(conn):

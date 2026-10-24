@@ -7,7 +7,16 @@ import httpx
 import pytest
 import respx
 
-from tape.edgar import FEED_URL, TICKERS_URL, Edgar, FilingRef, parse_feed, parse_form_index, parse_index_page
+from tape.edgar import (
+    FEED_URL,
+    TICKERS_URL,
+    Edgar,
+    EmptyFilingError,
+    FilingRef,
+    parse_feed,
+    parse_form_index,
+    parse_index_page,
+)
 
 FIX = Path(__file__).parent / "fixtures"
 FOLDER = "https://www.sec.gov/Archives/edgar/data/1/000000000126000101"
@@ -52,6 +61,34 @@ def test_end_to_end_fetch_sends_user_agent():
     assert filing.items == ("5.02", "9.01")
     assert "interim Chief Executive Officer" in filing.clean_text
     assert all(c.request.headers["User-Agent"] == "Tape test test@example.com" for c in respx.calls)
+
+
+def _index_without_documents():
+    """The fixture index page with its document table emptied."""
+    html = (FIX / "index.htm").read_text()
+    start = html.index('<table class="tableFile"')
+    end = html.index("</table>", start) + len("</table>")
+    return html[:start] + html[end:]
+
+
+@respx.mock
+def test_fetch_rejects_a_filing_with_no_documents():
+    respx.get(INDEX).respond(200, text=_index_without_documents())
+    edgar = Edgar("ua", per_second=1000)
+    ref = FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX)
+    with pytest.raises(EmptyFilingError, match="0000000001-26-000101"):
+        edgar.fetch(ref, max_chars=5000)
+
+
+@respx.mock
+def test_fetch_rejects_a_main_document_with_no_text():
+    _mock_filing(respx)
+    respx.get(f"{FOLDER}/exmp-20261013.htm").respond(200, text="<html><body><img src='p1.jpg'></body></html>")
+    respx.get(f"{FOLDER}/ex991.htm").respond(200, text="<html><body></body></html>")
+    edgar = Edgar("ua", per_second=1000)
+    ref = FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX)
+    with pytest.raises(EmptyFilingError):
+        edgar.fetch(ref, max_chars=5000)
 
 
 @respx.mock

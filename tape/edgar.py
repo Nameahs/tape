@@ -45,6 +45,10 @@ _ACC = re.compile(r"(\d{10}-\d{2}-\d{6})")
 _ITEM = re.compile(r"Item (\d\.\d{2})")
 
 
+class EmptyFilingError(ValueError):
+    """A filing whose documents yielded no text to score."""
+
+
 @dataclass(frozen=True)
 class FilingRef:
     """What we know about a filing before opening it."""
@@ -152,6 +156,11 @@ class Edgar:
         index = parse_index_page(self.get(ref.index_url).text, ref.index_url)
         main_html = self.get(index.main_url).text if index.main_url else ""
         exhibit_html = self.get(index.exhibit_url).text if index.exhibit_url else None
+        text = build_state_text(main_html, exhibit_html, max_chars)
+        if not text.strip():
+            # Nothing to score: no 8-K or EX-99 document on the index page, or only images. Raise so
+            # the filing isn't stored and a later pass can try again.
+            raise EmptyFilingError(f"no text found for {ref.accession_no} at {ref.index_url}")
         return Filing(
             accession_no=ref.accession_no,
             cik=ref.cik,
@@ -161,7 +170,7 @@ class Edgar:
             url=ref.index_url,
             items=tuple(index.items),
             ticker=self.ticker_for(ref.cik),
-            clean_text=build_state_text(main_html, exhibit_html, max_chars),
+            clean_text=text,
         )
 
 
