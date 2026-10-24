@@ -53,8 +53,9 @@ def build_state_text(main_html: str, exhibit_html: str | None, max_chars: int) -
     """The 8-K body first (it says what happened), then the press release (it says how much)."""
     main = drop_boilerplate(html_to_text(main_html))
     parts = [main]
-    if exhibit_html:
-        parts.append("EXHIBIT 99.1 (press release)\n" + drop_boilerplate(html_to_text(exhibit_html)))
+    exhibit = drop_boilerplate(html_to_text(exhibit_html)) if exhibit_html else ""
+    if exhibit:  # a label with nothing under it would make an empty filing look non-empty
+        parts.append("EXHIBIT 99.1 (press release)\n" + exhibit)
     text = "\n\n".join(parts)
     if len(text) <= max_chars:
         return text

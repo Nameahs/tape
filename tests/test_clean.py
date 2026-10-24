@@ -36,3 +36,10 @@ def test_state_text_includes_exhibit_and_respects_budget():
     short = build_state_text(main, ex, max_chars=300)
     assert len(short) <= 300
     assert short.startswith("UNITED STATES")
+
+
+def test_empty_exhibit_adds_no_label():
+    assert build_state_text("<p>Item 8.01 Other Events.</p>", "<html><body></body></html>", 1000) == (
+        "Item 8.01 Other Events."
+    )
+    assert build_state_text("", "<html><img src='scan.jpg'></html>", 1000) == ""
