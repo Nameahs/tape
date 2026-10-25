@@ -1,13 +1,13 @@
 import threading
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 import respx
 
-from tape import db
+from tape import db, pipeline
 from tape.config import Settings, Thresholds
 from tape.edgar import FEED_URL, Edgar
-from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route
+from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route, today_et
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
 from tests.test_edgar import FIX, _mock_filing
@@ -37,6 +37,22 @@ def test_backfill_skips_weekends(conn):
     # end=Mon Oct 12 with days=3 covers Fri 9, Sat 10, Sun 11
     stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=3, end=date(2026, 10, 12))
     assert weekday.called and stats.scored == 1
+
+
+def test_today_et_lags_utc_in_the_evening():
+    # 9:30pm EDT on Wed Oct 21 is already Thu Oct 22 in UTC.
+    assert today_et(datetime(2026, 10, 22, 1, 30, tzinfo=UTC)) == date(2026, 10, 21)
+    assert today_et(datetime(2026, 10, 22, 4, 30, tzinfo=UTC)) == date(2026, 10, 22)
+
+
+@respx.mock
+def test_backfill_defaults_to_eastern_today(conn, monkeypatch):
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.{}.idx"
+    tuesday = respx.get(idx.format("20261020")).respond(200, text=(FIX / "form.idx").read_text())
+    _mock_filing(respx)
+    monkeypatch.setattr(pipeline, "today_et", lambda: date(2026, 10, 21))
+    stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1)
+    assert tuesday.called and stats.scored == 1
 
 
 @respx.mock
