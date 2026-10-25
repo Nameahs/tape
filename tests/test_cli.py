@@ -156,3 +156,43 @@ def test_digest_send_without_credentials(tmp_path, monkeypatch, capsys, caplog):
     assert "4.4  EXMP  mna" in capsys.readouterr().out
     assert called == []
     assert "TELEGRAM_CHAT_ID not set" in caplog.text
+
+
+@pytest.mark.parametrize("text", ["", "  \n\t"])
+def test_brief_rejects_empty_text(tmp_path, monkeypatch, capsys, text):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+
+    assert main(["brief", acc, "--text", text]) == 1
+    assert "empty brief" in capsys.readouterr().err
+    main(["pending"])
+    assert [p["accession_no"] for p in json.loads(capsys.readouterr().out)] == [acc]
+
+
+def test_brief_rejects_empty_stdin(tmp_path, monkeypatch, capsys):
+    import io
+
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n"))
+
+    assert main(["brief", acc]) == 1
+    capsys.readouterr()
+    main(["pending"])
+    assert [p["accession_no"] for p in json.loads(capsys.readouterr().out)] == [acc]
+
+
+def test_brief_reads_stdin(tmp_path, monkeypatch, capsys):
+    import io
+
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("  Example Corp raised guidance.\n"))
+
+    assert main(["brief", acc]) == 0
+    conn = db.connect(path)
+    row = conn.execute("SELECT brief_text FROM briefs WHERE accession_no = ?", (acc,)).fetchone()
+    assert row["brief_text"] == "Example Corp raised guidance."
