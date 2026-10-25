@@ -10,9 +10,20 @@ _WS = re.compile(r"[ \t ]+")
 _BLANKS = re.compile(r"\n{3,}")
 # 8-K item headings, e.g. "Item 5.02 Departure of Directors or Certain Officers".
 _ITEM = re.compile(r"^\s*item\s+(\d\.\d{2})\b", re.IGNORECASE | re.MULTILINE)
-# Boilerplate that adds tokens without adding signal.
+# Section headings that start boilerplate which adds tokens without adding signal. A heading
+# must stand alone on its line or end in a colon or dash ("Forward-Looking Statements: This
+# release..."), so a sentence that merely opens with "Signature Aviation" or "Safe Harbor
+# Financial" is kept.
 _BOILERPLATE_START = re.compile(
-    r"^\s*(signatures?|forward[- ]looking statements|cautionary (note|statement)|safe harbor)\b",
+    r"^[ \t]*(?:"
+    r"signatures?"
+    r"|(?:(?:cautionary |special )?(?:note|statement)s? (?:regarding|concerning|about|on) )?"
+    r"forward[- ]looking (?:statements?|information)"
+    r"|cautionary (?:note|statement)s?"
+    r"|safe harbor(?: statement)?"
+    r"(?: (?:under the private securities litigation reform act(?: of 1995)?"
+    r"|for forward[- ]looking statements))?"
+    r")[ \t]*(?:[:\-–—]|$)",
     re.IGNORECASE | re.MULTILINE,
 )
 
