@@ -134,3 +134,5 @@ class Settings:
     def __post_init__(self) -> None:
         if self.jev_retry_budget_s <= 0:
             raise ValueError(f"jev_retry_budget_s must be positive, got {self.jev_retry_budget_s}")
+        if self.jev_input_price_per_m < 0:
+            raise ValueError(f"jev_input_price_per_m must not be negative, got {self.jev_input_price_per_m}")
