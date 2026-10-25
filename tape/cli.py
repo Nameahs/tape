@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from tape import db
 from tape.config import Settings
 
+log = logging.getLogger(__name__)
+
 
 def _edgar(settings: Settings):
     from tape.edgar import Edgar
@@ -51,8 +53,11 @@ def cmd_reroute(args, settings, conn) -> int:
 
 
 def cmd_pending(args, settings, conn) -> int:
-    """Filings routed 'now' that still need a brief, as JSON for the agent."""
-    rows = [dict(r) for r in db.pending_briefs(conn)]
+    """Filings routed 'now' that still need a brief, as JSON for the agent. Only filings accepted in the
+    last --max-age-hours are listed, so a backfill or reroute doesn't send old filings out as news.
+    """
+    since = (datetime.now(UTC) - timedelta(hours=args.max_age_hours)).isoformat()
+    rows = [dict(r) for r in db.pending_briefs(conn, since)]
     print(json.dumps(rows, indent=2))
     return 0
 
@@ -79,11 +84,24 @@ def format_digest(rows) -> str:
 def cmd_digest(args, settings, conn) -> int:
     since = (datetime.now(UTC) - timedelta(hours=args.hours)).isoformat()
     text = format_digest(db.digest_since(conn, since))
+    # Print first so the digest reaches the job log even when delivery fails.
+    print(text)
     if args.send:
+        import os
+
+        import httpx
+
         from tape.notify import send_telegram
 
-        send_telegram(text)
-    print(text)
+        missing = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.environ.get(k)]
+        if missing:
+            log.error("digest not sent: %s not set", " and ".join(missing))
+            return 1
+        try:
+            send_telegram(text)
+        except httpx.HTTPError as e:
+            log.error("digest not sent: Telegram request failed: %s", e)
+            return 1
     return 0
 
 
@@ -135,7 +153,10 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--days", type=_positive_int, default=90)
     b.set_defaults(fn=cmd_backfill)
     sub.add_parser("reroute", help="re-apply thresholds to stored scores").set_defaults(fn=cmd_reroute)
-    sub.add_parser("pending", help="filings waiting for a brief (JSON)").set_defaults(fn=cmd_pending)
+    pe = sub.add_parser("pending", help="recent filings waiting for a brief (JSON)")
+    pe.add_argument("--max-age-hours", type=_positive_int, default=24,
+                    help="skip filings EDGAR accepted longer ago than this (default 24)")
+    pe.set_defaults(fn=cmd_pending)
     br = sub.add_parser("brief", help="save a brief written by the agent")
     br.add_argument("accession_no")
     br.add_argument("--text", help="brief text; read from stdin if omitted")

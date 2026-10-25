@@ -1,5 +1,6 @@
 import json
 
+import httpx
 import pytest
 
 from tape import db
@@ -35,6 +36,28 @@ def test_pending_brief_digest(tmp_path, monkeypatch, capsys):
     main(["digest", "--hours", "24"])
     out = capsys.readouterr().out
     assert "4.4  EXMP  mna" in out
+
+
+def test_pending_skips_old_filings(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    conn = db.connect(path)
+    old = make_filing(1, accepted_at="2020-01-02T10:00:00-05:00")
+    db.upsert_filing(conn, old)
+    db.upsert_score(conn, make_score(old.accession_no, 4.9))
+    db.set_route(conn, old.accession_no, "now")
+    conn.commit()
+    conn.close()
+
+    assert main(["pending"]) == 0
+    assert json.loads(capsys.readouterr().out) == []
+    assert main(["pending", "--max-age-hours", "100000"]) == 0
+    assert [p["accession_no"] for p in json.loads(capsys.readouterr().out)] == [old.accession_no]
+
+
+def test_pending_rejects_zero_max_age(capsys):
+    with pytest.raises(SystemExit):
+        main(["pending", "--max-age-hours", "0"])
 
 
 def test_format_digest_empty():
@@ -86,3 +109,50 @@ def test_jev_client_gets_retry_settings(monkeypatch):
     monkeypatch.setattr(score, "default_client", lambda retry=None: seen.setdefault("retry", retry))
     cli._jev(Settings(jev_max_retries=1, jev_retry_budget_s=10.0))
     assert seen["retry"].max_retries == 1 and seen["retry"].timeout == 10.0
+
+
+def test_digest_send_delivers_printed_text(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    sent = []
+    monkeypatch.setattr("tape.notify.send_telegram", lambda text: sent.append(text) or 1)
+
+    assert main(["digest", "--send"]) == 0
+    out = capsys.readouterr().out
+    assert sent == [out.rstrip("\n")]
+
+
+def test_digest_send_failure_still_prints(tmp_path, monkeypatch, capsys, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+
+    def boom(text):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr("tape.notify.send_telegram", boom)
+
+    assert main(["digest", "--send"]) == 1
+    assert "4.4  EXMP  mna" in capsys.readouterr().out
+    assert "digest not sent" in caplog.text
+    assert "connection refused" in caplog.text
+
+
+def test_digest_send_without_credentials(tmp_path, monkeypatch, capsys, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    _seed(path)
+    called = []
+    monkeypatch.setattr("tape.notify.send_telegram", lambda text: called.append(text))
+
+    assert main(["digest", "--send"]) == 1
+    assert "4.4  EXMP  mna" in capsys.readouterr().out
+    assert called == []
+    assert "TELEGRAM_CHAT_ID not set" in caplog.text

@@ -53,6 +53,20 @@ def test_unscored_and_pending_flow(conn):
     assert db.pending_briefs(conn) == []
 
 
+def test_pending_briefs_since_skips_old_filings(conn):
+    old = make_filing(1, accepted_at="2026-07-01T10:00:00-04:00")
+    new = make_filing(2, accepted_at="2026-10-13T16:05:00-04:00")
+    for f in (old, new):
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 4.8))
+        db.set_route(conn, f.accession_no, "now")
+
+    assert len(db.pending_briefs(conn)) == 2
+    # Cutoff in UTC, filing times in ET: 20:05Z is exactly the newer filing's acceptance time.
+    assert [r["accession_no"] for r in db.pending_briefs(conn, "2026-10-13T20:05:00+00:00")] == [new.accession_no]
+    assert db.pending_briefs(conn, "2026-10-13T20:05:01+00:00") == []
+
+
 def test_save_brief_requires_route(conn):
     db.upsert_filing(conn, make_filing())
     with pytest.raises(KeyError):

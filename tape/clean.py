@@ -10,9 +10,20 @@ _WS = re.compile(r"[ \t ]+")
 _BLANKS = re.compile(r"\n{3,}")
 # 8-K item headings, e.g. "Item 5.02 Departure of Directors or Certain Officers".
 _ITEM = re.compile(r"^\s*item\s+(\d\.\d{2})\b", re.IGNORECASE | re.MULTILINE)
-# Boilerplate that adds tokens without adding signal.
+# Section headings that start boilerplate which adds tokens without adding signal. A heading
+# must stand alone on its line or end in a colon or dash ("Forward-Looking Statements: This
+# release..."), so a sentence that merely opens with "Signature Aviation" or "Safe Harbor
+# Financial" is kept.
 _BOILERPLATE_START = re.compile(
-    r"^\s*(signatures?|forward[- ]looking statements|cautionary (note|statement)|safe harbor)\b",
+    r"^[ \t]*(?:"
+    r"signatures?"
+    r"|(?:(?:cautionary |special )?(?:note|statement)s? (?:regarding|concerning|about|on) )?"
+    r"forward[- ]looking (?:statements?|information)"
+    r"|cautionary (?:note|statement)s?"
+    r"|safe harbor(?: statement)?"
+    r"(?: (?:under the private securities litigation reform act(?: of 1995)?"
+    r"|for forward[- ]looking statements))?"
+    r")[ \t]*(?:[:\-–—]|$)",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -59,9 +70,12 @@ def build_state_text(main_html: str, exhibit_html: str | None, max_chars: int) -
     text = "\n\n".join(parts)
     if len(text) <= max_chars:
         return text
-    # Keep the whole 8-K body if it fits in two thirds of the budget, then fill with the exhibit.
-    main_budget = min(len(main), (max_chars * 2) // 3)
+    # The 8-K body gets at least two thirds of the budget, plus whatever a short (or missing)
+    # exhibit leaves unused; the exhibit fills the rest.
+    exhibit = parts[1] if len(parts) > 1 else ""
+    exhibit_room = len(exhibit) + 2 if exhibit else 0
+    main_budget = min(len(main), max((max_chars * 2) // 3, max_chars - exhibit_room))
     head = main[:main_budget]
     rest = max_chars - len(head) - 2
-    tail = parts[1][:rest] if len(parts) > 1 and rest > 0 else ""
+    tail = exhibit[:rest] if exhibit and rest > 0 else ""
     return (head + "\n\n" + tail).strip()[:max_chars]

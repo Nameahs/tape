@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from tape.clean import build_state_text, drop_boilerplate, html_to_text, items_in
 
 FIX = Path(__file__).parent / "fixtures"
@@ -27,6 +29,40 @@ def test_drop_boilerplate_leaves_short_text_alone():
     assert drop_boilerplate("Signatures\nshort") == "Signatures\nshort"
 
 
+LEAD = "Item 1.01 Entry into a Material Definitive Agreement with a counterparty described below.\n"
+
+
+@pytest.mark.parametrize("line", [
+    "Signature Aviation agreed to buy the company for $4.6 billion in cash.",
+    "Signatures from 40% of holders were received, above the 25% needed to call a meeting.",
+    "Safe Harbor Financial will serve 400 new clients under the agreement.",
+    "Safe harbor provisions of the agreement cap the buyer's indemnity at $50 million.",
+    "Cautionary notes issued by the lender were withdrawn on October 1.",
+    "Forward-looking statements were not updated after the merger closed.",
+])
+def test_drop_boilerplate_keeps_sentences_that_open_with_a_heading_word(line):
+    text = LEAD + line + "\nThe deal is expected to close in the first quarter."
+    assert drop_boilerplate(text) == text
+
+
+@pytest.mark.parametrize("heading", [
+    "SIGNATURES",
+    "Signature:",
+    "Forward-Looking Statements",
+    "Forward-Looking Statements: This release contains statements about future results.",
+    "FORWARD LOOKING INFORMATION",
+    "Cautionary Note Regarding Forward-Looking Statements",
+    "Special Note About Forward-Looking Statements",
+    "Cautionary Statement — this release contains projections.",
+    "Safe Harbor Statement",
+    "Safe Harbor Statement under the Private Securities Litigation Reform Act of 1995",
+    "Safe Harbor for Forward-Looking Statements",
+])
+def test_drop_boilerplate_cuts_at_section_headings(heading):
+    text = LEAD + "The buyer will pay $4.6 billion in cash.\n" + heading + "\nRisks include..."
+    assert drop_boilerplate(text) == LEAD + "The buyer will pay $4.6 billion in cash."
+
+
 def test_state_text_includes_exhibit_and_respects_budget():
     main = (FIX / "main_8k.htm").read_text()
     ex = (FIX / "ex991.htm").read_text()
@@ -43,3 +79,22 @@ def test_empty_exhibit_adds_no_label():
         "Item 8.01 Other Events."
     )
     assert build_state_text("", "<html><img src='scan.jpg'></html>", 1000) == ""
+
+
+def _page(body: str) -> str:
+    return f"<html><body><p>{body}</p></body></html>"
+
+
+def test_state_text_uses_whole_budget_without_exhibit():
+    main = _page("Item 5.02 " + "word " * 400)
+    text = build_state_text(main, None, max_chars=600)
+    assert len(text) >= 590
+
+
+def test_state_text_gives_body_the_room_a_short_exhibit_leaves():
+    main = _page("Item 1.01 " + "word " * 400)
+    ex = _page("Short press release.")
+    text = build_state_text(main, ex, max_chars=600)
+    assert len(text) <= 600
+    assert text.endswith("Short press release.")
+    assert len(text) >= 590
