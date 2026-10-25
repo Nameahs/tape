@@ -74,6 +74,13 @@ def test_state_text_includes_exhibit_and_respects_budget():
     assert short.startswith("UNITED STATES")
 
 
+def test_empty_exhibit_adds_no_label():
+    assert build_state_text("<p>Item 8.01 Other Events.</p>", "<html><body></body></html>", 1000) == (
+        "Item 8.01 Other Events."
+    )
+    assert build_state_text("", "<html><img src='scan.jpg'></html>", 1000) == ""
+
+
 def _page(body: str) -> str:
     return f"<html><body><p>{body}</p></body></html>"
 

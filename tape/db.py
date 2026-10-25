@@ -241,10 +241,11 @@ def finish_run(conn: sqlite3.Connection, run_id: int, *, discovered: int = 0, fe
 
 
 def unscored(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Filings with text that Jev hasn't scored yet. Blank text (stored before fetch rejected it) is skipped."""
     return conn.execute(
         """
         SELECT f.* FROM filings f LEFT JOIN scores s USING (accession_no)
-        WHERE s.accession_no IS NULL AND f.clean_text IS NOT NULL
+        WHERE s.accession_no IS NULL AND trim(COALESCE(f.clean_text, ''), ' ' || char(9, 10, 13)) != ''
         ORDER BY f.accepted_at
         """
     ).fetchall()

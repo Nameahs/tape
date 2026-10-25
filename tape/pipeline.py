@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from tape import db
 from tape.config import Settings
-from tape.edgar import ET, Edgar, FilingRef
+from tape.edgar import ET, Edgar, EmptyFilingError, FilingRef
 from tape.route import route
 from tape.score import SystemOneClient, score_many
 
@@ -67,6 +67,10 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
             continue
         try:
             filing = edgar.fetch(ref, settings.max_chars)
+        except EmptyFilingError as e:
+            stats.fetch_errors += 1
+            log.warning("skipped: %s", e)
+            continue
         except Exception:
             stats.fetch_errors += 1
             log.exception("fetch failed for %s", ref.accession_no)
