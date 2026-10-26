@@ -150,3 +150,33 @@ def test_interrupted_scoring_keeps_scores_already_returned(conn, monkeypatch):
         score_and_route(conn, Interrupted(), Settings(), PassStats())
     assert [r["accession_no"] for r in conn.execute("SELECT accession_no FROM scores")] == [first.accession_no]
     assert [r["accession_no"] for r in db.unscored(conn)] == [second.accession_no]
+
+
+def test_score_and_route_stops_retrying_a_filing_jev_keeps_rejecting(conn, caplog):
+    stuck, fine = make_filing(1, clean_text="explode every time"), make_filing(2, clean_text="fine")
+    for f in (stuck, fine):
+        db.upsert_filing(conn, f)
+    conn.commit()
+    jev = FakeJev(fail_on={"explode"})
+
+    for _ in range(db.MAX_SCORE_ATTEMPTS + 2):
+        score_and_route(conn, jev, Settings(), PassStats())
+
+    sent = [c[0]["text"] for c in jev.calls]
+    assert sent.count("explode every time") == db.MAX_SCORE_ATTEMPTS
+    assert sent.count("fine") == 1
+    [row] = db.given_up(conn)
+    assert (row["accession_no"], row["last_error"]) == (stuck.accession_no, "RuntimeError: boom")
+    assert f"giving up on {stuck.accession_no}" in caplog.text
+
+
+def test_score_and_route_clears_a_failure_once_the_filing_scores(conn):
+    f = make_filing(1, clean_text="fine")
+    db.upsert_filing(conn, f)
+    db.record_score_failure(conn, f.accession_no, "ReadTimeout: slow")
+    conn.commit()
+
+    stats = PassStats()
+    score_and_route(conn, FakeJev(), Settings(), stats)
+    assert stats.scored == 1
+    assert conn.execute("SELECT COUNT(*) FROM score_failures").fetchone()[0] == 0

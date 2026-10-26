@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Protocol
 
@@ -123,27 +123,34 @@ def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float)
 
 
 def score_many(
-    client: SystemOneClient, rows: Iterable[Any], model: str, price_per_m: float, workers: int = 8
+    client: SystemOneClient, rows: Iterable[Any], model: str, price_per_m: float, workers: int = 8,
+    on_failure: Callable[[Any, Exception], None] | None = None,
 ) -> Iterator[ScoreRow]:
     """Score in parallel, yielding each result as soon as it finishes.
 
     Callers store results as they arrive, so an interrupted batch keeps what it already paid for.
-    A failed filing is logged and left unscored so the next pass retries it.
+    A failed filing is logged and left unscored so the next pass retries it. `on_failure(row, exc)`, if
+    given, is called for each one from the caller's thread (not a worker), so it can write to the
+    caller's SQLite connection.
     """
 
-    def safe(row: Any) -> ScoreRow | None:
+    def safe(row: Any) -> ScoreRow | Exception:
         try:
             return score_one(client, row, model, price_per_m)
-        except Exception:
+        except Exception as e:
             log.exception("scoring failed for %s", row["accession_no"])
-            return None
+            return e
 
     pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        for future in as_completed([pool.submit(safe, row) for row in rows]):
+        futures = {pool.submit(safe, row): row for row in rows}
+        for future in as_completed(futures):
             result = future.result()
-            if result is not None:
-                yield result
+            if isinstance(result, Exception):
+                if on_failure is not None:
+                    on_failure(futures[future], result)
+                continue
+            yield result
     finally:
         # If the caller stops early (Ctrl-C, job timeout, an exception while storing), drop the
         # filings not yet sent rather than waiting for and paying for the rest of the batch.
