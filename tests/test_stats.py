@@ -72,3 +72,20 @@ def test_format_stats(conn):
     assert lines[2].split() == ["2026-10-16", "1", "1", "1", "0", "0", "$0.01"]
     assert lines[3].split() == ["total", "1", "1"]
     assert lines[-1] == "Jev spend in window: $0.01 over 1 calls"
+
+
+def test_counts_filings_scoring_gave_up_on(conn):
+    _add(conn, 1, "2026-09-01T09:30:00-04:00")  # outside the window: still counted, it needs a look
+    _add(conn, 2, "2026-10-16T09:30:00-04:00")
+    stuck = make_filing(1).accession_no
+    for _ in range(db.MAX_SCORE_ATTEMPTS):
+        db.record_score_failure(conn, stuck, "RuntimeError: boom")
+    db.record_score_failure(conn, make_filing(2).accession_no, "ReadTimeout: slow")  # still being retried
+
+    s = collect(conn, days=2, today=TODAY)
+    assert s.given_up == 1
+    assert format_stats(s).splitlines()[-1].startswith("Gave up scoring 1 filing(s) after 3 failed attempts")
+
+
+def test_format_stats_omits_given_up_line_when_there_are_none(conn):
+    assert "Gave up" not in format_stats(collect(conn, days=1, today=TODAY))
