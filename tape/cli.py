@@ -69,8 +69,13 @@ def cmd_brief(args, settings, conn) -> int:
         print(f"error: empty brief for {args.accession_no}; nothing saved", file=sys.stderr)
         return 1
     sent_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with db.transaction(conn):
-        db.save_brief(conn, args.accession_no, text, sent_at)
+    try:
+        with db.transaction(conn):
+            db.save_brief(conn, args.accession_no, text, sent_at)
+    except KeyError:
+        # A mistyped accession number, or one never routed: the agent reads stderr, so one line, no traceback.
+        print(f"error: no routed filing {args.accession_no}; nothing saved", file=sys.stderr)
+        return 1
     print(f"saved brief for {args.accession_no}")
     return 0
 
