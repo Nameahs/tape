@@ -61,22 +61,29 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
            stats: PassStats) -> None:
     refs = list(refs)
     stats.discovered += len(refs)
-    known = db.known_accessions(conn, [r.accession_no for r in refs])
+    accessions = [r.accession_no for r in refs]
+    # Filings EDGAR has failed to give us text for MAX_FETCH_ATTEMPTS times are skipped too: the feed keeps
+    # them for hours, and refetching every pass only spends fair-access budget and floods the log.
+    skip = db.known_accessions(conn, accessions) | {r["accession_no"] for r in db.fetch_given_up(conn, accessions)}
     for ref in refs:
-        if ref.accession_no in known:
+        if ref.accession_no in skip:
             continue
         try:
             filing = edgar.fetch(ref, settings.max_chars)
-        except EmptyFilingError as e:
+        except Exception as e:
             stats.fetch_errors += 1
-            log.warning("skipped: %s", e)
-            continue
-        except Exception:
-            stats.fetch_errors += 1
-            log.exception("fetch failed for %s", ref.accession_no)
+            with db.transaction(conn):
+                attempts = db.record_fetch_failure(conn, ref.accession_no, f"{type(e).__name__}: {e}"[:500])
+            if isinstance(e, EmptyFilingError):
+                log.warning("skipped: %s", e)
+            else:
+                log.exception("fetch failed for %s", ref.accession_no)
+            if attempts >= db.MAX_FETCH_ATTEMPTS:
+                log.warning("giving up on fetching %s after %d failed attempts", ref.accession_no, attempts)
             continue
         with db.transaction(conn):
             db.upsert_filing(conn, filing)
+            db.clear_fetch_failure(conn, ref.accession_no)
         stats.fetched += 1
 
 
