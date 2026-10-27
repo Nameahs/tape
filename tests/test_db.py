@@ -203,3 +203,30 @@ def test_pending_briefs_includes_blank_briefs_already_stored(conn):
     db.set_route(conn, f.accession_no, "now")
     conn.execute("UPDATE briefs SET brief_text = '\t\n', sent_at = '2026-10-13T20:10:00Z'")
     assert [r["accession_no"] for r in db.pending_briefs(conn)] == [f.accession_no]
+
+
+def test_fetch_failures_count_up_to_the_limit(conn):
+    acc = "0000000001-26-000009"
+    for n in range(1, db.MAX_FETCH_ATTEMPTS):
+        assert db.record_fetch_failure(conn, acc, "EmptyFilingError: no text") == n
+        assert db.fetch_given_up(conn) == []  # still retried below the limit
+    db.record_fetch_failure(conn, acc, "HTTPStatusError: 404", at="2026-10-27T15:00:00Z")
+
+    [row] = db.fetch_given_up(conn)
+    assert dict(row) == {"accession_no": acc, "attempts": db.MAX_FETCH_ATTEMPTS,
+                         "last_error": "HTTPStatusError: 404", "last_attempt_at": "2026-10-27T15:00:00Z"}
+    assert [r["accession_no"] for r in db.fetch_given_up(conn, [acc, "other"])] == [acc]
+    assert db.fetch_given_up(conn, ["other"]) == []
+    assert db.fetch_given_up(conn, []) == []
+
+
+def test_clear_fetch_failure_and_stored_filings_are_not_given_up(conn):
+    gone, stored = "0000000001-26-000009", make_filing(1)
+    for _ in range(db.MAX_FETCH_ATTEMPTS):
+        db.record_fetch_failure(conn, gone, "boom")
+        db.record_fetch_failure(conn, stored.accession_no, "boom")
+    db.upsert_filing(conn, stored)  # e.g. fetched by hand since
+    assert [r["accession_no"] for r in db.fetch_given_up(conn)] == [gone]
+
+    db.clear_fetch_failure(conn, gone)
+    assert db.fetch_given_up(conn) == []

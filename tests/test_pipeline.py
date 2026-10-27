@@ -81,6 +81,36 @@ def test_empty_filing_is_skipped_and_retried_later(conn):
     index.respond(200, text=(FIX / "index.htm").read_text())
     again = run_pass(conn, edgar, jev, settings)
     assert (again.fetched, again.scored) == (1, 1)
+    assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
+
+
+@respx.mock
+def test_empty_filing_is_fetched_at_most_max_attempts_times(conn, caplog):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    index = respx.get(INDEX)
+    index.respond(200, text=_index_without_documents())
+    edgar, jev, settings = Edgar("ua", per_second=1000), FakeJev(), Settings()
+
+    passes = [run_pass(conn, edgar, jev, settings) for _ in range(db.MAX_FETCH_ATTEMPTS + 2)]
+
+    assert index.call_count == db.MAX_FETCH_ATTEMPTS
+    assert [p.fetch_errors for p in passes] == [1] * db.MAX_FETCH_ATTEMPTS + [0, 0]
+    assert all(p.fetched == 0 and p.discovered == 1 for p in passes)
+    [row] = db.fetch_given_up(conn)
+    assert row["last_error"].startswith("EmptyFilingError: no text found")
+    assert "giving up on fetching" in caplog.text
+
+
+@respx.mock
+def test_http_error_on_fetch_counts_as_a_failed_attempt(conn):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    respx.get(INDEX).respond(404)
+    stats = run_pass(conn, Edgar("ua", per_second=1000), FakeJev(), Settings())
+    assert stats.fetch_errors == 1
+    (attempts, error), = conn.execute("SELECT attempts, last_error FROM fetch_failures").fetchall()
+    assert attempts == 1 and error.startswith("HTTPStatusError")
 
 
 def _runs(conn):

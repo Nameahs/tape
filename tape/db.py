@@ -101,11 +101,26 @@ MIGRATIONS: list[str] = [
         last_attempt_at TEXT NOT NULL
     );
     """,
+    # 4: filings EDGAR failed to give us text for (no 8-K or EX-99 document, only images, or a permanent
+    # HTTP error). These are never stored in filings, so without a record ingest would treat them as new
+    # and fetch them again on every pass. No foreign key: the filing row usually doesn't exist.
+    """
+    CREATE TABLE fetch_failures (
+        accession_no    TEXT PRIMARY KEY,
+        attempts        INTEGER NOT NULL,
+        last_error      TEXT NOT NULL,
+        last_attempt_at TEXT NOT NULL
+    );
+    """,
 ]
 
 # Failed scoring attempts before a filing is left out of unscored(). Enough to ride out a Jev incident
 # spanning a couple of passes, few enough that a filing Jev always rejects stops costing requests.
 MAX_SCORE_ATTEMPTS = 3
+
+# Failed fetches before ingest stops asking EDGAR for a filing. The latest-filings feed holds a bad filing
+# for hours, so this caps the cost at a few requests instead of one round per pass.
+MAX_FETCH_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -301,6 +316,43 @@ def given_up(conn: sqlite3.Connection, max_attempts: int = MAX_SCORE_ATTEMPTS) -
         ORDER BY sf.last_attempt_at
         """,
         (max_attempts,),
+    ).fetchall()
+
+
+def record_fetch_failure(conn: sqlite3.Connection, accession_no: str, error: str,
+                         at: str | None = None) -> int:
+    """Count one more failed fetch for a filing. Returns the attempts so far."""
+    row = conn.execute(
+        """
+        INSERT INTO fetch_failures (accession_no, attempts, last_error, last_attempt_at) VALUES (?, 1, ?, ?)
+        ON CONFLICT (accession_no) DO UPDATE SET
+            attempts = attempts + 1, last_error = excluded.last_error, last_attempt_at = excluded.last_attempt_at
+        RETURNING attempts
+        """,
+        (accession_no, error, at or _utc_now()),
+    ).fetchone()
+    return int(row["attempts"])
+
+
+def clear_fetch_failure(conn: sqlite3.Connection, accession_no: str) -> None:
+    conn.execute("DELETE FROM fetch_failures WHERE accession_no = ?", (accession_no,))
+
+
+def fetch_given_up(conn: sqlite3.Connection, accessions: list[str] | None = None,
+                   max_attempts: int = MAX_FETCH_ATTEMPTS) -> list[sqlite3.Row]:
+    """Filings ingest no longer fetches, oldest attempt first; with `accessions`, only those among them.
+    Filings stored since (fetched by hand, say) are left out. Delete a row from fetch_failures to retry one.
+    """
+    if accessions is not None and not accessions:
+        return []
+    only = f"AND ff.accession_no IN ({','.join('?' * len(accessions))})" if accessions else ""
+    return conn.execute(
+        f"""
+        SELECT ff.* FROM fetch_failures ff LEFT JOIN filings f USING (accession_no)
+        WHERE f.accession_no IS NULL AND ff.attempts >= ? {only}
+        ORDER BY ff.last_attempt_at
+        """,
+        (max_attempts, *(accessions or ())),
     ).fetchall()
 
 

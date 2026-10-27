@@ -89,3 +89,15 @@ def test_counts_filings_scoring_gave_up_on(conn):
 
 def test_format_stats_omits_given_up_line_when_there_are_none(conn):
     assert "Gave up" not in format_stats(collect(conn, days=1, today=TODAY))
+
+
+def test_counts_filings_fetching_gave_up_on(conn):
+    for _ in range(db.MAX_FETCH_ATTEMPTS):
+        db.record_fetch_failure(conn, "0000000001-26-000009", "EmptyFilingError: no text")
+    db.record_fetch_failure(conn, "0000000001-26-000010", "ReadTimeout: slow")  # still being retried
+
+    s = collect(conn, days=1, today=TODAY)
+    assert (s.given_up, s.fetch_given_up) == (0, 1)
+    out = format_stats(s)
+    assert out.splitlines()[-1].startswith("Gave up fetching 1 filing(s) after 3 failed attempts")
+    assert "Gave up scoring" not in out
