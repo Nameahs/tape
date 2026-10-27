@@ -192,6 +192,33 @@ def test_stale_ticker_cache_used_when_refresh_fails(tmp_path, monkeypatch):
 
 
 @respx.mock
+def test_ticker_download_failure_on_cold_cache_does_not_fail_fetch(tmp_path, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    _mock_filing(respx)
+    respx.get(TICKERS_URL).respond(500)
+    edgar = Edgar("ua", per_second=1000, cache_dir=tmp_path)
+    filing = edgar.fetch(FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX), 5000)
+    assert filing.ticker is None
+    assert filing.clean_text
+
+
+@respx.mock
+def test_ticker_map_is_retried_after_a_failed_download(tmp_path, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    clock = [1000.0]
+    monkeypatch.setattr("tape.edgar.time.monotonic", lambda: clock[0])
+    route = respx.get(TICKERS_URL)
+    route.side_effect = [httpx.Response(503)] * 4 + [httpx.Response(200, text=_tickers_text())]
+    edgar = Edgar("ua", per_second=1000, cache_dir=tmp_path)
+    assert edgar.ticker_for("0000000001") is None
+    assert edgar.ticker_for("0000000001") is None  # within the retry window: no new download
+    assert route.call_count == 4
+    clock[0] += 301
+    assert edgar.ticker_for("0000000001") == "EXMP"
+    assert route.call_count == 5
+
+
+@respx.mock
 def test_corrupt_ticker_cache_is_replaced(tmp_path):
     (tmp_path / "company_tickers.json").write_text('{"0": {"cik_str"')
     respx.get(TICKERS_URL).respond(200, text=_tickers_text())
