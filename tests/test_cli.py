@@ -196,3 +196,16 @@ def test_brief_reads_stdin(tmp_path, monkeypatch, capsys):
     conn = db.connect(path)
     row = conn.execute("SELECT brief_text FROM briefs WHERE accession_no = ?", (acc,)).fetchone()
     assert row["brief_text"] == "Example Corp raised guidance."
+
+
+def test_brief_unknown_accession_is_one_line_error(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+
+    assert main(["brief", "0000000000-99-999999", "--text", "Example Corp raised guidance."]) == 1
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "error: no routed filing 0000000000-99-999999; nothing saved"
+    assert "Traceback" not in captured.err
+    main(["pending"])
+    assert [p["accession_no"] for p in json.loads(capsys.readouterr().out)] == [acc]
