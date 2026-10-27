@@ -30,6 +30,8 @@ class Stats:
     # Filings scoring gave up on (any day, not just the window): they need a look, and stay unscored
     # until their score_failures row is deleted.
     given_up: int = 0
+    # Filings ingest stopped fetching (no text, or EDGAR kept erroring); never stored, so not in `days`.
+    fetch_given_up: int = 0
 
 
 def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) -> Stats:
@@ -73,7 +75,7 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) 
         (start_utc.isoformat(), end_utc.isoformat()),
     ).fetchone()
     return Stats(days=[buckets[k] for k in sorted(buckets)], spend_usd=float(spend["cost"]), calls=int(spend["n"]),
-                 given_up=len(db.given_up(conn)))
+                 given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)))
 
 
 def format_stats(s: Stats) -> str:
@@ -92,5 +94,10 @@ def format_stats(s: Stats) -> str:
         lines.append(
             f"Gave up scoring {s.given_up:,} filing(s) after {db.MAX_SCORE_ATTEMPTS} failed attempts "
             "(listed in score_failures; delete a row to retry it)"
+        )
+    if s.fetch_given_up:
+        lines.append(
+            f"Gave up fetching {s.fetch_given_up:,} filing(s) after {db.MAX_FETCH_ATTEMPTS} failed attempts "
+            "(listed in fetch_failures; delete a row to retry it)"
         )
     return "\n".join(lines)
