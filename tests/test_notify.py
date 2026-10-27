@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from tape import notify
-from tape.notify import API, MAX_ATTEMPTS, chunks, send_telegram
+from tape.notify import API, MAX_ATTEMPTS, RETRY_STATUSES, chunks, send_telegram
 
 
 def test_chunks_respects_limit():
@@ -86,6 +86,46 @@ def test_send_telegram_does_not_retry_other_errors(sleeps):
     assert sleeps == []
 
 
+@pytest.mark.parametrize("status", sorted(RETRY_STATUSES))
+@respx.mock
+def test_send_telegram_retries_server_errors(sleeps, status):
+    ok = httpx.Response(200, json={"ok": True})
+    route = respx.post(API.format(token="T")).mock(side_effect=[httpx.Response(status), ok])
+    assert send_telegram("hi", token="T", chat_id="42", client=httpx.Client()) == 1
+    assert route.call_count == 2
+    assert sleeps == [1.0]
+
+
+@respx.mock
+def test_send_telegram_retries_transport_errors_mid_digest(sleeps):
+    ok = httpx.Response(200, json={"ok": True})
+    route = respx.post(API.format(token="T")).mock(
+        side_effect=[ok, httpx.ReadTimeout("slow"), httpx.ConnectError("reset"), ok]
+    )
+    text = "\n".join(["a" * 3000, "b" * 3000])
+    assert send_telegram(text, token="T", chat_id="42", client=httpx.Client()) == 2
+    assert route.call_count == 4
+    assert sleeps == [1.0, 2.0]
+
+
+@respx.mock
+def test_send_telegram_raises_server_error_after_retry_limit(sleeps):
+    route = respx.post(API.format(token="T")).respond(502)
+    with pytest.raises(httpx.HTTPStatusError):
+        send_telegram("hi", token="T", chat_id="42", client=httpx.Client())
+    assert route.call_count == MAX_ATTEMPTS
+    assert sleeps == [1.0, 2.0, 4.0]
+
+
+@respx.mock
+def test_send_telegram_raises_transport_error_after_retry_limit(sleeps):
+    route = respx.post(API.format(token="T")).mock(side_effect=httpx.ConnectError("down"))
+    with pytest.raises(httpx.ConnectError):
+        send_telegram("hi", token="T", chat_id="42", client=httpx.Client())
+    assert route.call_count == MAX_ATTEMPTS
+    assert len(sleeps) == MAX_ATTEMPTS - 1
+
+
 class _TrackingClient(httpx.Client):
     instances: list["_TrackingClient"] = []
 
@@ -98,7 +138,7 @@ class _TrackingClient(httpx.Client):
 def test_send_telegram_closes_the_client_it_creates(monkeypatch):
     _TrackingClient.instances.clear()
     monkeypatch.setattr(notify.httpx, "Client", _TrackingClient)
-    respx.post(API.format(token="T")).respond(500)
+    respx.post(API.format(token="T")).respond(401)
     with pytest.raises(httpx.HTTPStatusError):
         send_telegram("hi", token="T", chat_id="42")
     assert len(_TrackingClient.instances) == 1

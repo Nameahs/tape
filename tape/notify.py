@@ -11,6 +11,9 @@ API = "https://api.telegram.org/bot{token}/sendMessage"
 LIMIT = 4096  # Telegram's max message length
 MAX_ATTEMPTS = 4  # per chunk, so one rate limit doesn't cut a digest off halfway
 MAX_RETRY_AFTER = 30.0  # never wait longer than this on one 429
+# Server-side failures worth another try. Telegram returns these during incidents and they usually clear
+# within seconds; other 4xx (bad token, unknown chat) will fail the same way every time.
+RETRY_STATUSES = frozenset({500, 502, 503, 504})
 
 
 def chunks(text: str, limit: int = LIMIT) -> list[str]:
@@ -48,11 +51,25 @@ def send_telegram(text: str, token: str | None = None, chat_id: str | None = Non
 
 
 def _post(client: httpx.Client, url: str, payload: dict[str, object]) -> httpx.Response:
-    """POST one message, waiting out Telegram's 429s before giving up."""
+    """POST one message, waiting out Telegram's 429s, 5xx and transport errors before giving up.
+
+    A retry after a timeout can, rarely, deliver a chunk twice. A repeated line in the digest is a
+    better failure than a digest that stops halfway.
+    """
+    last = MAX_ATTEMPTS - 1
     for attempt in range(MAX_ATTEMPTS):
-        resp = client.post(url, json=payload)
-        if resp.status_code == 429 and attempt < MAX_ATTEMPTS - 1:
+        try:
+            resp = client.post(url, json=payload)
+        except httpx.TransportError:
+            if attempt == last:
+                raise
+            time.sleep(float(2**attempt))
+            continue
+        if resp.status_code == 429 and attempt < last:
             time.sleep(_retry_after(resp, attempt))
+            continue
+        if resp.status_code in RETRY_STATUSES and attempt < last:
+            time.sleep(float(2**attempt))
             continue
         resp.raise_for_status()
         return resp

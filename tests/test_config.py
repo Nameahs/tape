@@ -83,3 +83,22 @@ def test_retry_budget_must_be_positive(monkeypatch):
     monkeypatch.setenv("TAPE_JEV_RETRY_BUDGET_S", "0")
     with pytest.raises(ValueError, match="jev_retry_budget_s must be positive"):
         Settings.from_env()
+
+
+@pytest.mark.parametrize("raw", ["nan", "NaN", "inf", "-inf", "Infinity"])
+@pytest.mark.parametrize("name", ["TAPE_DIGEST", "TAPE_BRIEF_NOW__MNA", "TAPE_JEV_RETRY_BUDGET_S"])
+def test_non_finite_numbers_are_rejected(monkeypatch, name, raw):
+    monkeypatch.setenv(name, raw)
+    with pytest.raises(ValueError, match=f"{name}: expected a finite number"):
+        Settings.from_env()
+
+
+def test_jev_price_must_not_be_negative(monkeypatch):
+    monkeypatch.setenv("TAPE_JEV_PRICE_PER_M", "-0.042")
+    with pytest.raises(ValueError, match="jev_input_price_per_m must not be negative"):
+        Settings.from_env()
+
+
+def test_jev_price_may_be_zero(monkeypatch):
+    monkeypatch.setenv("TAPE_JEV_PRICE_PER_M", "0")
+    assert Settings.from_env().jev_input_price_per_m == 0.0
