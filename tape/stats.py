@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from tape import db
+
 ET = ZoneInfo("America/New_York")
 ROUTES = ("now", "digest", "log")
 
@@ -25,6 +27,9 @@ class Stats:
     days: list[DayStats]
     spend_usd: float  # Jev cost of every score made in the window, whatever day the filing is from
     calls: int
+    # Filings scoring gave up on (any day, not just the window): they need a look, and stay unscored
+    # until their score_failures row is deleted.
+    given_up: int = 0
 
 
 def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) -> Stats:
@@ -67,7 +72,8 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) 
         """,
         (start_utc.isoformat(), end_utc.isoformat()),
     ).fetchone()
-    return Stats(days=[buckets[k] for k in sorted(buckets)], spend_usd=float(spend["cost"]), calls=int(spend["n"]))
+    return Stats(days=[buckets[k] for k in sorted(buckets)], spend_usd=float(spend["cost"]), calls=int(spend["n"]),
+                 given_up=len(db.given_up(conn)))
 
 
 def format_stats(s: Stats) -> str:
@@ -82,4 +88,9 @@ def format_stats(s: Stats) -> str:
     total_scored = sum(d.scored for d in s.days)
     lines.append(f"{'total':<10}  {total_filings:>7,}  {total_scored:>6,}")
     lines.append(f"Jev spend in window: ${s.spend_usd:.2f} over {s.calls:,} calls")
+    if s.given_up:
+        lines.append(
+            f"Gave up scoring {s.given_up:,} filing(s) after {db.MAX_SCORE_ATTEMPTS} failed attempts "
+            "(listed in score_failures; delete a row to retry it)"
+        )
     return "\n".join(lines)

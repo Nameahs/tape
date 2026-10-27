@@ -149,6 +149,43 @@ def test_run_kind_constraint(conn):
         db.start_run(conn, "nightly")
 
 
+def test_score_failures_count_up_and_stop_unscored_at_the_limit(conn):
+    stuck, fine = make_filing(1), make_filing(2)
+    db.upsert_filing(conn, stuck)
+    db.upsert_filing(conn, fine)
+    for n in range(1, db.MAX_SCORE_ATTEMPTS):
+        assert db.record_score_failure(conn, stuck.accession_no, "HTTPStatusError: 400") == n
+        assert len(db.unscored(conn)) == 2  # still retried below the limit
+    db.record_score_failure(conn, stuck.accession_no, "KeyError: 'materiality'", at="2026-10-26T15:00:00Z")
+
+    assert [r["accession_no"] for r in db.unscored(conn)] == [fine.accession_no]
+    [row] = db.given_up(conn)
+    assert row["accession_no"] == stuck.accession_no
+    assert row["attempts"] == db.MAX_SCORE_ATTEMPTS
+    assert row["last_error"] == "KeyError: 'materiality'"
+    assert row["last_attempt_at"] == "2026-10-26T15:00:00Z"
+
+
+def test_clear_score_failure_puts_a_filing_back_in_the_queue(conn):
+    f = make_filing()
+    db.upsert_filing(conn, f)
+    for _ in range(db.MAX_SCORE_ATTEMPTS):
+        db.record_score_failure(conn, f.accession_no, "boom")
+    assert db.unscored(conn) == []
+    db.clear_score_failure(conn, f.accession_no)
+    assert [r["accession_no"] for r in db.unscored(conn)] == [f.accession_no]
+    assert db.given_up(conn) == []
+
+
+def test_given_up_ignores_filings_scored_since(conn):
+    f = make_filing()
+    db.upsert_filing(conn, f)
+    for _ in range(db.MAX_SCORE_ATTEMPTS):
+        db.record_score_failure(conn, f.accession_no, "boom")
+    db.upsert_score(conn, make_score(f.accession_no, 2.0))  # e.g. rescored by hand
+    assert db.given_up(conn) == []
+
+
 def test_save_brief_rejects_blank_text(conn):
     f = make_filing()
     db.upsert_filing(conn, f)

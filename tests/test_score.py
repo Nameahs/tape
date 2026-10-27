@@ -62,6 +62,18 @@ def test_score_many_skips_failures(conn):
     assert [s.accession_no for s in out] == [rows[0]["accession_no"]]
 
 
+def test_score_many_reports_failures_on_the_callers_thread(conn):
+    rows = [_row(conn, 1, clean_text="fine"), _row(conn, 2, clean_text="explode please")]
+    seen = []
+
+    def on_failure(row, exc):
+        seen.append((row["accession_no"], str(exc), threading.current_thread() is threading.main_thread()))
+
+    out = list(score_many(FakeJev(fail_on={"explode"}), rows, "m", 0.042, workers=2, on_failure=on_failure))
+    assert [s.accession_no for s in out] == [rows[0]["accession_no"]]
+    assert seen == [(rows[1]["accession_no"], "boom", True)]
+
+
 def test_score_many_yields_before_the_batch_finishes(conn):
     release = threading.Event()
 

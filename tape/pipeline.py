@@ -84,9 +84,17 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
     rows = db.unscored(conn)
     if not rows:
         return
-    for s in score_many(jev, rows, settings.jev_model, settings.jev_input_price_per_m):
+
+    def failed(row, exc: Exception) -> None:
+        with db.transaction(conn):
+            attempts = db.record_score_failure(conn, row["accession_no"], f"{type(exc).__name__}: {exc}"[:500])
+        if attempts >= db.MAX_SCORE_ATTEMPTS:
+            log.warning("giving up on %s after %d failed scoring attempts", row["accession_no"], attempts)
+
+    for s in score_many(jev, rows, settings.jev_model, settings.jev_input_price_per_m, on_failure=failed):
         with db.transaction(conn):
             db.upsert_score(conn, s)
+            db.clear_score_failure(conn, s.accession_no)
             r = route(s, settings.thresholds)
             db.set_route(conn, s.accession_no, r)
         stats.scored += 1

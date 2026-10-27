@@ -90,7 +90,22 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_runs_started ON runs(started_at);
     """,
+    # 3: filings Jev failed to score. A transient error clears on the next pass; a filing Jev rejects every
+    # time would otherwise be resent on every pass forever. After MAX_SCORE_ATTEMPTS, unscored() stops
+    # offering it until the row is cleared by hand.
+    """
+    CREATE TABLE score_failures (
+        accession_no    TEXT PRIMARY KEY REFERENCES filings(accession_no) ON DELETE CASCADE,
+        attempts        INTEGER NOT NULL,
+        last_error      TEXT NOT NULL,
+        last_attempt_at TEXT NOT NULL
+    );
+    """,
 ]
+
+# Failed scoring attempts before a filing is left out of unscored(). Enough to ride out a Jev incident
+# spanning a couple of passes, few enough that a filing Jev always rejects stops costing requests.
+MAX_SCORE_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -242,14 +257,50 @@ def finish_run(conn: sqlite3.Connection, run_id: int, *, discovered: int = 0, fe
         )
 
 
-def unscored(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Filings with text that Jev hasn't scored yet. Blank text (stored before fetch rejected it) is skipped."""
+def unscored(conn: sqlite3.Connection, max_attempts: int = MAX_SCORE_ATTEMPTS) -> list[sqlite3.Row]:
+    """Filings with text that Jev hasn't scored yet. Blank text (stored before fetch rejected it) is skipped,
+    and so is any filing that has already failed `max_attempts` times (see given_up()).
+    """
     return conn.execute(
         """
         SELECT f.* FROM filings f LEFT JOIN scores s USING (accession_no)
+        LEFT JOIN score_failures sf USING (accession_no)
         WHERE s.accession_no IS NULL AND trim(COALESCE(f.clean_text, ''), ' ' || char(9, 10, 13)) != ''
+          AND COALESCE(sf.attempts, 0) < ?
         ORDER BY f.accepted_at
+        """,
+        (max_attempts,),
+    ).fetchall()
+
+
+def record_score_failure(conn: sqlite3.Connection, accession_no: str, error: str,
+                         at: str | None = None) -> int:
+    """Count one more failed scoring attempt for a filing. Returns the attempts so far."""
+    row = conn.execute(
         """
+        INSERT INTO score_failures (accession_no, attempts, last_error, last_attempt_at) VALUES (?, 1, ?, ?)
+        ON CONFLICT (accession_no) DO UPDATE SET
+            attempts = attempts + 1, last_error = excluded.last_error, last_attempt_at = excluded.last_attempt_at
+        RETURNING attempts
+        """,
+        (accession_no, error, at or _utc_now()),
+    ).fetchone()
+    return int(row["attempts"])
+
+
+def clear_score_failure(conn: sqlite3.Connection, accession_no: str) -> None:
+    conn.execute("DELETE FROM score_failures WHERE accession_no = ?", (accession_no,))
+
+
+def given_up(conn: sqlite3.Connection, max_attempts: int = MAX_SCORE_ATTEMPTS) -> list[sqlite3.Row]:
+    """Unscored filings that unscored() no longer offers. Delete a row from score_failures to retry one."""
+    return conn.execute(
+        """
+        SELECT sf.* FROM score_failures sf LEFT JOIN scores s USING (accession_no)
+        WHERE s.accession_no IS NULL AND sf.attempts >= ?
+        ORDER BY sf.last_attempt_at
+        """,
+        (max_attempts,),
     ).fetchall()
 
 
