@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
@@ -27,11 +28,18 @@ def _int(name: str, default: int, minimum: int) -> int:
 
 
 def _parse_float(name: str, raw: str) -> float:
-    """Parse a number from the environment, naming the variable if it isn't one."""
+    """Parse a number from the environment, naming the variable if it isn't one.
+
+    float() also accepts "nan" and "inf". Every comparison with NaN is false, so a NaN cutoff would
+    quietly route every filing to the log; refuse both.
+    """
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         raise ValueError(f"{name}: expected a number, got {raw!r}") from None
+    if not math.isfinite(value):
+        raise ValueError(f"{name}: expected a finite number, got {raw!r}")
+    return value
 
 
 @dataclass(frozen=True)
@@ -126,3 +134,5 @@ class Settings:
     def __post_init__(self) -> None:
         if self.jev_retry_budget_s <= 0:
             raise ValueError(f"jev_retry_budget_s must be positive, got {self.jev_retry_budget_s}")
+        if self.jev_input_price_per_m < 0:
+            raise ValueError(f"jev_input_price_per_m must not be negative, got {self.jev_input_price_per_m}")
