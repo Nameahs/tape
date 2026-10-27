@@ -1,12 +1,13 @@
 import threading
 from datetime import UTC, date, datetime
 
+import httpx
 import pytest
 import respx
 
 from tape import db, pipeline
 from tape.config import Settings, Thresholds
-from tape.edgar import FEED_URL, Edgar
+from tape.edgar import FEED_URL, TICKERS_URL, Edgar
 from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route, today_et
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
@@ -210,3 +211,35 @@ def test_score_and_route_clears_a_failure_once_the_filing_scores(conn):
     score_and_route(conn, FakeJev(), Settings(), stats)
     assert stats.scored == 1
     assert conn.execute("SELECT COUNT(*) FROM score_failures").fetchone()[0] == 0
+
+
+@respx.mock
+def test_filing_stored_without_ticker_is_filled_in_on_a_later_pass(conn, tmp_path, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    monkeypatch.setattr(pipeline, "TICKER_BACKFILL_DAYS", 36500)  # the fixture filing is from October 2026
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    tickers = respx.get(TICKERS_URL)
+    ok = httpx.Response(200, text=(FIX / "company_tickers.json").read_text())
+    tickers.side_effect = [httpx.Response(503)] * 4 + [ok]
+    jev, settings = FakeJev(), Settings()
+
+    stats = run_pass(conn, Edgar("ua", per_second=1000, cache_dir=tmp_path), jev, settings)
+    assert (stats.fetched, stats.fetch_errors) == (1, 0)
+    assert conn.execute("SELECT ticker FROM filings").fetchone()[0] is None
+
+    # The next scheduled pass is a new process with a fresh Edgar.
+    run_pass(conn, Edgar("ua", per_second=1000, cache_dir=tmp_path), jev, settings)
+    assert conn.execute("SELECT ticker FROM filings").fetchone()[0] == "EXMP"
+
+
+def test_fill_missing_tickers_skips_old_filings(conn):
+    class Tickers:
+        def ticker_for(self, cik):
+            return "EXMP"
+
+    db.upsert_filing(conn, make_filing(1, cik="0000000001", ticker=None, accepted_at="2026-10-20T09:00:00-04:00"))
+    db.upsert_filing(conn, make_filing(2, cik="0000000001", ticker=None, accepted_at="2026-09-01T09:00:00-04:00"))
+    assert pipeline.fill_missing_tickers(conn, Tickers(), now=datetime(2026, 10, 21, tzinfo=UTC)) == 1
+    tickers = dict(conn.execute("SELECT accession_no, ticker FROM filings").fetchall())
+    assert tickers == {"0000000001-26-000001": "EXMP", "0000000001-26-000002": None}

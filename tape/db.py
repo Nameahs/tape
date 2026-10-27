@@ -209,6 +209,22 @@ def upsert_filing(conn: sqlite3.Connection, f: Filing) -> None:
     )
 
 
+def missing_tickers(conn: sqlite3.Connection, since_iso: str) -> list[sqlite3.Row]:
+    """Filings accepted at or after `since_iso` that were stored without a ticker."""
+    return conn.execute(
+        """
+        SELECT accession_no, cik FROM filings
+        WHERE ticker IS NULL AND julianday(accepted_at) >= julianday(?)
+        ORDER BY accepted_at
+        """,
+        (since_iso,),
+    ).fetchall()
+
+
+def set_ticker(conn: sqlite3.Connection, accession_no: str, ticker: str) -> None:
+    conn.execute("UPDATE filings SET ticker = ? WHERE accession_no = ? AND ticker IS NULL", (ticker, accession_no))
+
+
 def upsert_score(conn: sqlite3.Connection, s: ScoreRow) -> None:
     conn.execute(
         """

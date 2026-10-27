@@ -230,3 +230,20 @@ def test_clear_fetch_failure_and_stored_filings_are_not_given_up(conn):
 
     db.clear_fetch_failure(conn, gone)
     assert db.fetch_given_up(conn) == []
+
+
+def test_missing_tickers_only_returns_recent_filings_without_one(conn):
+    db.upsert_filing(conn, make_filing(1, ticker=None, accepted_at="2026-10-20T09:00:00-04:00"))
+    db.upsert_filing(conn, make_filing(2, ticker=None, accepted_at="2026-10-01T09:00:00-04:00"))
+    db.upsert_filing(conn, make_filing(3, accepted_at="2026-10-20T09:00:00-04:00"))
+    rows = db.missing_tickers(conn, "2026-10-13T00:00:00+00:00")
+    assert [r["accession_no"] for r in rows] == ["0000000001-26-000001"]
+
+
+def test_set_ticker_does_not_overwrite_an_existing_ticker(conn):
+    db.upsert_filing(conn, make_filing(1, ticker=None))
+    db.upsert_filing(conn, make_filing(2, ticker="OLD"))
+    db.set_ticker(conn, "0000000001-26-000001", "EXMP")
+    db.set_ticker(conn, "0000000001-26-000002", "NEW")
+    tickers = dict(conn.execute("SELECT accession_no, ticker FROM filings").fetchall())
+    assert tickers == {"0000000001-26-000001": "EXMP", "0000000001-26-000002": "OLD"}

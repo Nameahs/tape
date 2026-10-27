@@ -18,6 +18,10 @@ from tape.score import SystemOneClient, score_many
 
 log = logging.getLogger(__name__)
 
+# How far back to look for filings stored without a ticker. Most 8-K filers without one never get
+# one, so the window keeps each pass from rechecking the whole history.
+TICKER_BACKFILL_DAYS = 7
+
 
 @dataclass
 class PassStats:
@@ -109,9 +113,31 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
         stats.cost_usd += s.cost_usd or 0.0
 
 
+def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime | None = None,
+                         days: int | None = None) -> int:
+    """Give recent filings stored without a ticker one, now that the ticker map may be available.
+
+    A filing is never refetched once stored, so one fetched while the ticker map couldn't be
+    downloaded would otherwise keep a NULL ticker and drop out of pricing and the digest's labels.
+    """
+    window = timedelta(days=TICKER_BACKFILL_DAYS if days is None else days)
+    since = ((now or datetime.now(UTC)) - window).isoformat()
+    filled = 0
+    with db.transaction(conn):
+        for row in db.missing_tickers(conn, since):
+            ticker = edgar.ticker_for(row["cik"])
+            if ticker:
+                db.set_ticker(conn, row["accession_no"], ticker)
+                filled += 1
+    if filled:
+        log.info("filled in tickers for %d filings", filled)
+    return filled
+
+
 def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings) -> PassStats:
     with recorded(conn, "pass") as stats:
         ingest(conn, edgar, edgar.latest_8k(), settings, stats)
+        fill_missing_tickers(conn, edgar)
         score_and_route(conn, jev, settings, stats)
     return stats
 
