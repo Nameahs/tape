@@ -147,3 +147,22 @@ def test_run_lifecycle(conn):
 def test_run_kind_constraint(conn):
     with pytest.raises(sqlite3.IntegrityError):
         db.start_run(conn, "nightly")
+
+
+def test_save_brief_rejects_blank_text(conn):
+    f = make_filing()
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no, 4.6))
+    db.set_route(conn, f.accession_no, "now")
+    with pytest.raises(ValueError):
+        db.save_brief(conn, f.accession_no, " \n", "2026-10-13T20:10:00Z")
+    assert [r["accession_no"] for r in db.pending_briefs(conn)] == [f.accession_no]
+
+
+def test_pending_briefs_includes_blank_briefs_already_stored(conn):
+    f = make_filing()
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no, 4.6))
+    db.set_route(conn, f.accession_no, "now")
+    conn.execute("UPDATE briefs SET brief_text = '\t\n', sent_at = '2026-10-13T20:10:00Z'")
+    assert [r["accession_no"] for r in db.pending_briefs(conn)] == [f.accession_no]

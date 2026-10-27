@@ -63,10 +63,14 @@ def cmd_pending(args, settings, conn) -> int:
 
 
 def cmd_brief(args, settings, conn) -> int:
-    text = args.text if args.text is not None else sys.stdin.read()
+    text = (args.text if args.text is not None else sys.stdin.read()).strip()
+    if not text:
+        # Saving '' would mark the filing briefed and sent, and it would drop out of `pending`.
+        print(f"error: empty brief for {args.accession_no}; nothing saved", file=sys.stderr)
+        return 1
     sent_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     with db.transaction(conn):
-        db.save_brief(conn, args.accession_no, text.strip(), sent_at)
+        db.save_brief(conn, args.accession_no, text, sent_at)
     print(f"saved brief for {args.accession_no}")
     return 0
 
