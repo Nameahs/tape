@@ -49,7 +49,7 @@ agent credit. Jev scoring costs cents per day.
 
 ```bash
 tape backfill --days 90 -v
-tape evaluate
+tape evaluate --days 140   # 90 business days is about 130 calendar days
 tape dashboard
 ```
 
