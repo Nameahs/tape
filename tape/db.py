@@ -374,7 +374,8 @@ def _pending_briefs_query(since_iso: str | None) -> tuple[str, tuple[str, ...]]:
     # The date filter is added only when asked for. Written as `? IS NULL OR julianday(...) >= ...`
     # it kept SQLite from seeking on idx_filings_accepted_jd, so every pass walked the whole history
     # of 'now' routes instead of just the window.
-    since_clause, params = "", ()
+    since_clause = ""
+    params: tuple[str, ...] = ()
     if since_iso is not None:
         since_clause, params = "AND julianday(f.accepted_at) >= julianday(?)", (since_iso,)
     sql = f"""
