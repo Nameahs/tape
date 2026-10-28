@@ -10,6 +10,7 @@ from tests.conftest import make_filing, make_score
 
 # Mon Oct 5 to Mon Oct 12, 2026; Fri Oct 9 traded, then the weekend.
 DAYS = [date(2026, 10, d) for d in (5, 6, 7, 8, 9, 12)]
+TODAY = date(2026, 10, 14)
 
 
 @pytest.mark.parametrize(
@@ -45,11 +46,52 @@ def test_compute_outcomes(conn):
     no_ticker = make_filing(2, ticker=None)
     db.upsert_filing(conn, no_ticker)
     db.upsert_score(conn, make_score(no_ticker.accession_no))
-    assert compute_outcomes(conn, FakePrices()) == 1
+    assert compute_outcomes(conn, FakePrices(), today=TODAY) == 1
     row = conn.execute("SELECT * FROM outcomes").fetchone()
     assert row["event_day"] == "2026-10-07"
     assert row["abnormal_return"] == pytest.approx(-0.10)
-    assert compute_outcomes(conn, FakePrices()) == 0  # idempotent
+    assert compute_outcomes(conn, FakePrices(), today=TODAY) == 0  # idempotent
+
+
+class RecordingPrices(FakePrices):
+    def __init__(self):
+        self.calls = []
+
+    def closes(self, tickers, start, end):
+        self.calls.append((tickers, start, end))
+        return super().closes(tickers, start, end)
+
+
+def test_compute_outcomes_skips_filings_older_than_lookback(conn):
+    # An unpriceable filing from a backfill months ago must not pin the download window.
+    stale = make_filing(1, accepted_at="2026-06-01T10:00:00-04:00", ticker="GONE")
+    recent = make_filing(2, accepted_at="2026-10-06T16:30:00-04:00")
+    for f in (stale, recent):
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no))
+    prices = RecordingPrices()
+    assert compute_outcomes(conn, prices, lookback_days=30, today=TODAY) == 1
+    (tickers, start, _), = prices.calls
+    assert "GONE" not in tickers
+    assert start == date(2026, 9, 29)  # 7 days before the oldest filing inside the window
+
+
+def test_compute_outcomes_with_nothing_in_window_downloads_nothing(conn):
+    f = make_filing(1, accepted_at="2026-06-01T10:00:00-04:00")
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no))
+    prices = RecordingPrices()
+    assert compute_outcomes(conn, prices, lookback_days=30, today=TODAY) == 0
+    assert prices.calls == []
+
+
+def test_compute_outcomes_longer_lookback_reaches_old_filings(conn):
+    f = make_filing(1, accepted_at="2026-10-06T16:30:00-04:00")
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no))
+    later = date(2026, 12, 31)
+    assert compute_outcomes(conn, FakePrices(), today=later) == 0
+    assert compute_outcomes(conn, FakePrices(), lookback_days=120, today=later) == 1
 
 
 def _frame(signal: float, n: int = 400, seed: int = 1) -> pd.DataFrame:
