@@ -112,6 +112,12 @@ MIGRATIONS: list[str] = [
         last_attempt_at TEXT NOT NULL
     );
     """,
+    # 5: date-range queries compare julianday(accepted_at), since EDGAR's offsets vary (-04:00/-05:00) and a
+    # plain text comparison would misorder them. idx_filings_accepted is on the bare column, so those
+    # queries scanned the whole table; an index on the same expression lets them seek instead.
+    """
+    CREATE INDEX idx_filings_accepted_jd ON filings(julianday(accepted_at));
+    """,
 ]
 
 # Failed scoring attempts before a filing is left out of unscored(). Enough to ride out a Jev incident
