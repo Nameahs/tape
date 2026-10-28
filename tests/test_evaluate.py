@@ -52,6 +52,25 @@ def test_compute_outcomes(conn):
     assert compute_outcomes(conn, FakePrices()) == 0  # idempotent
 
 
+class GappyPrices:
+    def closes(self, tickers, start, end):
+        data = {
+            "SPY": [100, 101, 101, 101, 101, 101],
+            "EXMP": [50, 50, np.nan, 55, 55, 55],     # no close on Oct 7
+        }
+        return pd.DataFrame({t: data[t] for t in tickers if t in data}, index=DAYS)
+
+
+def test_compute_outcomes_skips_a_day_after_a_missing_close(conn):
+    # Event day Oct 8 follows a day with no EXMP close. Filling the gap would book the two-day
+    # move from Oct 6 (+10%) as Oct 8's return; with no prior close there is no one-day return.
+    f = make_filing(1, accepted_at="2026-10-07T17:00:00-04:00")
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no))
+    assert compute_outcomes(conn, GappyPrices()) == 0
+    assert conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()[0] == 0
+
+
 def _frame(signal: float, n: int = 400, seed: int = 1) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     score = rng.uniform(1, 5, n)

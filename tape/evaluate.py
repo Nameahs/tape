@@ -71,7 +71,9 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource) -> int:
     tickers = sorted({r["ticker"] for r in rows} | {MARKET})
     closes = prices.closes(tickers, first, last).sort_index()
     trading_days = [d for d in closes.index if pd.notna(closes.at[d, MARKET])]
-    returns = closes.loc[trading_days].pct_change()
+    # No filling: a missing prior close must leave the return NaN rather than fold several days'
+    # move into one (pandas 2.x pads by default, pandas 3 doesn't).
+    returns = closes.loc[trading_days].pct_change(fill_method=None)
 
     written = 0
     for r in rows:
