@@ -15,8 +15,19 @@ def test_chunks_respects_limit():
     assert "\n".join(parts) == text
 
 
-def test_chunks_truncates_overlong_line():
-    assert chunks("y" * 250, limit=100) == ["y" * 100]
+def test_chunks_splits_overlong_line_without_losing_text():
+    assert chunks("y" * 250, limit=100) == ["y" * 100, "y" * 100, "y" * 50]
+
+
+def test_chunks_breaks_overlong_line_at_a_space():
+    words = " ".join(f"word{i:04d}" for i in range(1100))  # ~9,900 characters on one line
+    text = f"header\n{words}\nfooter"
+    parts = chunks(text)
+    assert len(parts) == 4  # header alone (the next piece fills a message), three pieces, footer on the last
+    assert all(len(p) <= 4096 for p in parts)
+    # Every word arrives intact and in order; only the spaces the line was broken on are gone.
+    assert " ".join(parts).replace("\n", " ").split() == text.split()
+    assert parts[0] == "header" and parts[-1].endswith("\nfooter")
 
 
 @respx.mock
