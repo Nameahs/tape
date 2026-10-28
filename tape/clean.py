@@ -45,10 +45,11 @@ def html_to_text(html: str) -> str:
 
 def drop_boilerplate(text: str) -> str:
     """Cut everything from the first signature or safe-harbor section onward."""
-    m = _BOILERPLATE_START.search(text)
-    # Only cut if the boilerplate starts after some real content.
-    if m and m.start() > 80:
-        return text[: m.start()].rstrip()
+    # Only cut where the boilerplate starts after some real content. A notice at the very top
+    # (press releases often open with one) is skipped, not treated as the end of the search.
+    for m in _BOILERPLATE_START.finditer(text):
+        if m.start() > 80:
+            return text[: m.start()].rstrip()
     return text
 
 
