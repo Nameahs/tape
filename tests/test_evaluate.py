@@ -5,7 +5,17 @@ import pandas as pd
 import pytest
 
 from tape import db
-from tape.evaluate import bootstrap_gap_ci, compute_outcomes, evaluate, event_day, format_report, rule_flag, spearman
+from tape.evaluate import (
+    MIN_OUTCOMES,
+    NotEnoughOutcomes,
+    bootstrap_gap_ci,
+    compute_outcomes,
+    evaluate,
+    event_day,
+    format_report,
+    rule_flag,
+    spearman,
+)
 from tests.conftest import make_filing, make_score
 
 # Mon Oct 5 to Mon Oct 12, 2026; Fri Oct 9 traded, then the weekend.
@@ -83,8 +93,11 @@ def test_evaluate_without_signal_looks_random():
 
 
 def test_evaluate_needs_enough_rows():
-    with pytest.raises(ValueError):
+    with pytest.raises(NotEnoughOutcomes) as exc:
         evaluate(_frame(0.0, n=10))
+    assert (exc.value.have, exc.value.need) == (10, MIN_OUTCOMES)
+    # Still a ValueError, so existing callers that catch that keep working.
+    assert isinstance(exc.value, ValueError)
 
 
 def test_rule_flag_and_spearman():

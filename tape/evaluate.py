@@ -24,6 +24,15 @@ MARKET = "SPY"
 # Item codes a rule-writer would flag without any AI.
 RULE_ITEMS = {"1.01", "2.01", "2.02", "5.02"}
 BIG_MOVE = 0.03
+MIN_OUTCOMES = 20  # below this the bucket means and the shuffled baseline are mostly noise
+
+
+class NotEnoughOutcomes(ValueError):
+    """Too few filings have next-day prices to evaluate yet; normal for the first weeks after deploy."""
+
+    def __init__(self, have: int, need: int = MIN_OUTCOMES) -> None:
+        super().__init__(f"need at least {need} filings with outcomes, have {have}")
+        self.have, self.need = have, need
 
 
 class PriceSource(Protocol):
@@ -175,8 +184,8 @@ def _lift(flag: pd.Series, move: pd.Series) -> float:
 
 
 def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
-    if len(df) < 20:
-        raise ValueError(f"need at least 20 filings with outcomes, have {len(df)}")
+    if len(df) < MIN_OUTCOMES:
+        raise NotEnoughOutcomes(len(df))
     df = df.reset_index(drop=True)
     score, move = df["materiality"], df["abs_ar"]
 
