@@ -37,6 +37,9 @@ TICKERS_FILE = "company_tickers.json"
 TICKERS_MAX_AGE = 24 * 3600  # the SEC regenerates the file daily
 MAX_ATTEMPTS = 4
 MAX_RETRY_AFTER = 60.0  # never wait longer than this on one Retry-After
+# 429 and 503 mean slow down. 500, 502 and 504 come from EDGAR's front end during busy
+# periods and usually clear within seconds, so they get the same backoff.
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 log = logging.getLogger(__name__)
 
@@ -96,8 +99,8 @@ class Edgar:
                 log.warning("EDGAR request failed, retrying: %s", url, exc_info=True)
                 time.sleep(2**attempt)
                 continue
-            # 429 and 503 mean slow down; back off and retry, unless this was the last try.
-            if resp.status_code in (429, 503) and attempt < MAX_ATTEMPTS - 1:
+            # Back off and retry transient statuses, unless this was the last try.
+            if resp.status_code in RETRY_STATUSES and attempt < MAX_ATTEMPTS - 1:
                 time.sleep(_retry_delay(resp, attempt))
                 continue
             resp.raise_for_status()

@@ -149,6 +149,40 @@ def test_gives_up_on_429_without_a_final_sleep(monkeypatch):
     assert sleeps == [1.0, 2.0, 4.0]
 
 @respx.mock
+@pytest.mark.parametrize("status", [500, 502, 504])
+def test_retries_server_errors(monkeypatch, status):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    route = respx.get(FEED_URL)
+    route.side_effect = [httpx.Response(status), httpx.Response(200, text=(FIX / "feed.atom").read_text())]
+    assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_gives_up_on_repeated_504(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("tape.edgar.Throttle.wait", lambda self: None)
+    monkeypatch.setattr("tape.edgar.time.sleep", sleeps.append)
+    route = respx.get(FEED_URL).respond(504)
+    with pytest.raises(httpx.HTTPStatusError):
+        Edgar("ua", per_second=1000).latest_8k()
+    assert route.call_count == 4
+    assert sleeps == [1.0, 2.0, 4.0]
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [400, 404, 501])
+def test_does_not_retry_permanent_errors(monkeypatch, status):
+    sleeps = []
+    monkeypatch.setattr("tape.edgar.time.sleep", sleeps.append)
+    route = respx.get(FEED_URL).respond(status)
+    with pytest.raises(httpx.HTTPStatusError):
+        Edgar("ua", per_second=1000).latest_8k()
+    assert route.call_count == 1
+    assert sleeps == []
+
+
+@respx.mock
 def test_daily_index_missing_on_weekend_is_empty():
     respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261011.idx").respond(404)
     assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 11)) == []
