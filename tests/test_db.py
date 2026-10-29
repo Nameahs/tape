@@ -119,6 +119,34 @@ def test_migrates_a_version_zero_database_in_place(tmp_path):
     assert db.connect(path).execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
+def test_accepted_at_range_queries_seek_on_the_julianday_index(conn):
+    # Every date-range query compares julianday(accepted_at); without an index on that expression
+    # SQLite scans the whole filings table, text and all.
+    plan = " ".join(
+        r["detail"] for r in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT accession_no FROM filings "
+            "WHERE julianday(accepted_at) >= julianday(?) AND julianday(accepted_at) < julianday(?)",
+            ("2026-10-13T00:00:00+00:00", "2026-10-14T00:00:00+00:00"),
+        )
+    )
+    assert "USING INDEX idx_filings_accepted_jd" in plan
+
+
+def test_julianday_index_is_added_to_an_existing_database(tmp_path):
+    path = tmp_path / "v4.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA)
+    for script in db.MIGRATIONS[:4]:
+        old.executescript(script)
+    old.execute("PRAGMA user_version = 4")
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "idx_filings_accepted_jd" in names
+
+
 def test_score_confidence_round_trips(conn):
     f = make_filing()
     db.upsert_filing(conn, f)
