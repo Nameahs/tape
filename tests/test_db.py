@@ -67,6 +67,26 @@ def test_pending_briefs_since_skips_old_filings(conn):
     assert db.pending_briefs(conn, "2026-10-13T20:05:01+00:00") == []
 
 
+def test_pending_briefs_since_seeks_on_the_julianday_index(conn):
+    # A history of old 'now' routes (backfills, reroutes) with a few recent ones. With statistics in
+    # place the windowed query should start from the recent filings, not walk every 'now' brief.
+    for n in range(300):
+        f = make_filing(n, accepted_at=f"2026-{1 + n // 30:02d}-{1 + n % 28:02d}T10:00:00-04:00")
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 4.0))
+        db.set_route(conn, f.accession_no, "now")
+    conn.execute("ANALYZE")
+
+    sql, params = db._pending_briefs_query("2026-10-20T00:00:00+00:00")
+    plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, params))
+    assert "USING INDEX idx_filings_accepted_jd" in plan
+
+
+def test_pending_briefs_without_since_has_no_date_filter():
+    sql, params = db._pending_briefs_query(None)
+    assert "julianday" not in sql and params == ()
+
+
 def test_save_brief_requires_route(conn):
     db.upsert_filing(conn, make_filing())
     with pytest.raises(KeyError):
