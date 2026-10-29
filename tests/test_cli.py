@@ -209,3 +209,25 @@ def test_brief_unknown_accession_is_one_line_error(tmp_path, monkeypatch, capsys
     assert "Traceback" not in captured.err
     main(["pending"])
     assert [p["accession_no"] for p in json.loads(capsys.readouterr().out)] == [acc]
+
+
+def test_evaluate_with_too_few_outcomes_exits_cleanly(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    out = tmp_path / "eval.json"
+
+    assert main(["evaluate", "--skip-prices", "--out", str(out)]) == 0
+    assert "not enough outcomes to evaluate yet: 0 of 20" in capsys.readouterr().out
+    assert not out.exists()
+
+
+def test_evaluate_with_too_few_outcomes_keeps_earlier_report(tmp_path, monkeypatch):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    out = tmp_path / "eval.json"
+    out.write_text('{"n": 25}')
+
+    assert main(["evaluate", "--skip-prices", "--out", str(out)]) == 0
+    assert out.read_text() == '{"n": 25}'

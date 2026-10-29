@@ -124,11 +124,24 @@ def cmd_stats(args, settings, conn) -> int:
 def cmd_evaluate(args, settings, conn) -> int:
     from pathlib import Path
 
-    from tape.evaluate import YFinancePrices, compute_outcomes, evaluate, format_report, load_frame
+    from tape.evaluate import (
+        NotEnoughOutcomes,
+        YFinancePrices,
+        compute_outcomes,
+        evaluate,
+        format_report,
+        load_frame,
+    )
 
     if not args.skip_prices:
         print(f"outcomes added: {compute_outcomes(conn, YFinancePrices())}")
-    report = evaluate(load_frame(conn))
+    try:
+        report = evaluate(load_frame(conn))
+    except NotEnoughOutcomes as e:
+        # Normal for the first weeks after deploy. Exit 0 so `tape evaluate && tape dashboard` still
+        # refreshes the dashboard, and leave any earlier report in place rather than overwrite it.
+        print(f"not enough outcomes to evaluate yet: {e.have} of {e.need}; report not written")
+        return 0
     print(format_report(report))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
