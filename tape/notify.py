@@ -16,11 +16,29 @@ MAX_RETRY_AFTER = 30.0  # never wait longer than this on one 429
 RETRY_STATUSES = frozenset({500, 502, 503, 504})
 
 
+def _pieces(line: str, limit: int) -> list[str]:
+    """Break one line into pieces of at most `limit`, at the last space before the limit where there is one.
+    The space a piece ends on is dropped; nothing else is lost.
+    """
+    out = []
+    while len(line) > limit:
+        cut = line.rfind(" ", 0, limit + 1)
+        if cut <= 0:
+            out.append(line[:limit])
+            line = line[limit:]
+        else:
+            out.append(line[:cut])
+            line = line[cut + 1:]
+    out.append(line)
+    return out
+
+
 def chunks(text: str, limit: int = LIMIT) -> list[str]:
-    """Split on line breaks so no message exceeds Telegram's limit."""
+    """Split on line breaks so no message exceeds Telegram's limit. A line longer than the limit is
+    spread over consecutive messages rather than cut short.
+    """
     out, cur = [], ""
-    for line in text.splitlines():
-        line = line[:limit]
+    for line in (p for raw in text.splitlines() for p in _pieces(raw, limit)):
         if cur and len(cur) + 1 + len(line) > limit:
             out.append(cur)
             cur = line
