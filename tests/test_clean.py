@@ -25,6 +25,18 @@ def test_drop_boilerplate_cuts_signatures():
     assert "interim Chief Executive Officer" in text
 
 
+def test_drop_boilerplate_looks_past_a_heading_at_the_top():
+    body = "Revenue grew 12 percent on strong demand in every segment. " * 3
+    text = (
+        "Forward-Looking Statements\nThis release contains forward-looking statements.\n"
+        "Item 2.02 Results of Operations and Financial Condition\n" + body
+        + "\nSIGNATURES\nPursuant to the requirements of the Securities Exchange Act of 1934"
+    )
+    out = drop_boilerplate(text)
+    assert "SIGNATURES" not in out and "Pursuant" not in out
+    assert out.startswith("Forward-Looking Statements") and out.endswith("every segment.")
+
+
 def test_drop_boilerplate_leaves_short_text_alone():
     assert drop_boilerplate("Signatures\nshort") == "Signatures\nshort"
 
