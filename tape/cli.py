@@ -126,6 +126,7 @@ def cmd_evaluate(args, settings, conn) -> int:
 
     from tape.evaluate import (
         PRICE_LOOKBACK_DAYS,
+        NotEnoughOutcomes,
         YFinancePrices,
         compute_outcomes,
         evaluate,
@@ -136,7 +137,13 @@ def cmd_evaluate(args, settings, conn) -> int:
     if not args.skip_prices:
         added = compute_outcomes(conn, YFinancePrices(), lookback_days=args.days or PRICE_LOOKBACK_DAYS)
         print(f"outcomes added: {added}")
-    report = evaluate(load_frame(conn))
+    try:
+        report = evaluate(load_frame(conn))
+    except NotEnoughOutcomes as e:
+        # Normal for the first weeks after deploy. Exit 0 so `tape evaluate && tape dashboard` still
+        # refreshes the dashboard, and leave any earlier report in place rather than overwrite it.
+        print(f"not enough outcomes to evaluate yet: {e.have} of {e.need}; report not written")
+        return 0
     print(format_report(report))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
