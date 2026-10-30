@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from tape import db
-from tape.dashboard import _daily, _daily_chart, build, write
+from tape.dashboard import DAILY_SQL, _daily, _daily_chart, build, write
 from tests.conftest import make_filing, make_score
 
 NOW = datetime(2026, 10, 13, 22, 0, tzinfo=UTC)
@@ -100,3 +100,9 @@ def test_daily_chart_empty_when_no_spend(conn):
     assert _daily_chart(_daily(conn, NOW)) == ""
     html = build(conn, None, NOW)
     assert "Table view" in html and "No Jev calls" not in html  # calls but no recorded cost
+
+
+def test_daily_query_seeks_on_the_scored_at_index(conn):
+    window = ("2026-10-01T00:00:00+00:00",)
+    plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + DAILY_SQL, window))
+    assert "USING INDEX idx_scores_scored_jd" in plan

@@ -12,6 +12,8 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 DAILY_DAYS = 14
+# Must keep the exact julianday(scored_at) expression so SQLite seeks on idx_scores_scored_jd.
+DAILY_SQL = "SELECT scored_at, cost_usd FROM scores WHERE julianday(scored_at) >= julianday(?)"
 
 CSS = """
 .viz-root { color-scheme: light; --surface-1:#fcfcfb; --surface-2:#f3f2ef; --rule:#e4e2dc;
@@ -109,8 +111,7 @@ def _daily(conn: sqlite3.Connection, now: datetime, days: int = DAILY_DAYS) -> l
     start_utc = datetime.combine(first, time(), ET).astimezone(UTC)
     buckets = {first + timedelta(days=i): [0, 0.0] for i in range(days)}
     rows = conn.execute(
-        "SELECT scored_at, cost_usd FROM scores WHERE julianday(scored_at) >= julianday(?)",
-        (start_utc.isoformat(),),
+        DAILY_SQL, (start_utc.isoformat(),),
     )
     for r in rows:
         b = buckets.get(datetime.fromisoformat(r["scored_at"]).astimezone(ET).date())

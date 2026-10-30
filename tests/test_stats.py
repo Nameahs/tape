@@ -3,7 +3,7 @@ from datetime import date
 import pytest
 
 from tape import db
-from tape.stats import collect, format_stats
+from tape.stats import SPEND_SQL, collect, format_stats
 from tests.conftest import make_filing, make_score
 
 TODAY = date(2026, 10, 16)
@@ -101,3 +101,9 @@ def test_counts_filings_fetching_gave_up_on(conn):
     out = format_stats(s)
     assert out.splitlines()[-1].startswith("Gave up fetching 1 filing(s) after 3 failed attempts")
     assert "Gave up scoring" not in out
+
+
+def test_spend_query_seeks_on_the_scored_at_index(conn):
+    window = ("2026-10-01T00:00:00+00:00", "2026-10-08T00:00:00+00:00")
+    plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + SPEND_SQL, window))
+    assert "USING INDEX idx_scores_scored_jd" in plan
