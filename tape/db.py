@@ -118,6 +118,11 @@ MIGRATIONS: list[str] = [
     """
     CREATE INDEX idx_filings_accepted_jd ON filings(julianday(accepted_at));
     """,
+    # 6: the same for scores. `tape stats` and the dashboard's daily volume chart filter on
+    # julianday(scored_at) and only want the last week or two; without this they read every score ever made.
+    """
+    CREATE INDEX idx_scores_scored_jd ON scores(julianday(scored_at));
+    """,
 ]
 
 # Failed scoring attempts before a filing is left out of unscored(). Enough to ride out a Jev incident

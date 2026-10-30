@@ -167,6 +167,33 @@ def test_julianday_index_is_added_to_an_existing_database(tmp_path):
     assert "idx_filings_accepted_jd" in names
 
 
+def test_scored_at_range_queries_seek_on_the_julianday_index(conn):
+    plan = " ".join(
+        r["detail"] for r in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT cost_usd FROM scores "
+            "WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) < julianday(?)",
+            ("2026-10-13T00:00:00+00:00", "2026-10-14T00:00:00+00:00"),
+        )
+    )
+    assert "USING INDEX idx_scores_scored_jd" in plan
+
+
+def test_scored_at_index_is_added_to_an_existing_database(tmp_path):
+    path = tmp_path / "v5.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA)
+    for script in db.MIGRATIONS[:5]:
+        old.executescript(script)
+    old.execute("PRAGMA user_version = 5")
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "idx_scores_scored_jd" in names
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+
+
 def test_score_confidence_round_trips(conn):
     f = make_filing()
     db.upsert_filing(conn, f)
