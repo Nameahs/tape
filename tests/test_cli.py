@@ -252,3 +252,26 @@ def test_evaluate_passes_lookback_to_compute_outcomes(argv, expected, tmp_path, 
     with pytest.raises(_Stop):
         main(["evaluate", *argv])
     assert seen["days"] == expected
+
+
+@pytest.mark.parametrize("argv", [["run"], ["backfill", "--days", "1"]])
+def test_edgar_commands_require_a_contact_user_agent(argv, tmp_path, monkeypatch):
+    monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.delenv("TAPE_USER_AGENT", raising=False)
+
+    def no_network(*_a, **_k):
+        raise AssertionError("EDGAR should not be contacted")
+
+    monkeypatch.setattr("tape.edgar.Edgar.get", no_network)
+    with pytest.raises(ValueError, match="TAPE_USER_AGENT"):
+        main(argv)
+
+
+def test_commands_without_edgar_ignore_the_user_agent(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    monkeypatch.delenv("TAPE_USER_AGENT", raising=False)
+    _seed(path)
+    assert main(["stats"]) == 0
+    assert main(["pending"]) == 0
+    assert main(["digest"]) == 0
