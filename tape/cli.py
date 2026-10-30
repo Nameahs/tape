@@ -125,6 +125,7 @@ def cmd_evaluate(args, settings, conn) -> int:
     from pathlib import Path
 
     from tape.evaluate import (
+        PRICE_LOOKBACK_DAYS,
         NotEnoughOutcomes,
         YFinancePrices,
         compute_outcomes,
@@ -134,7 +135,8 @@ def cmd_evaluate(args, settings, conn) -> int:
     )
 
     if not args.skip_prices:
-        print(f"outcomes added: {compute_outcomes(conn, YFinancePrices())}")
+        added = compute_outcomes(conn, YFinancePrices(), lookback_days=args.days or PRICE_LOOKBACK_DAYS)
+        print(f"outcomes added: {added}")
     try:
         report = evaluate(load_frame(conn))
     except NotEnoughOutcomes as e:
@@ -192,6 +194,10 @@ def build_parser() -> argparse.ArgumentParser:
     st.set_defaults(fn=cmd_stats)
     e = sub.add_parser("evaluate", help="pull prices, compute abnormal returns, compare to baselines")
     e.add_argument("--skip-prices", action="store_true", help="use outcomes already stored")
+    # Default lives in tape.evaluate; importing it here would load pandas for every command.
+    e.add_argument("--days", type=_positive_int, default=None,
+                   help="price filings accepted in the last N days (default 30; "
+                        "raise it once after a backfill)")
     e.add_argument("--out", default="out/eval.json")
     e.set_defaults(fn=cmd_evaluate)
     ds = sub.add_parser("dashboard", help="write the static HTML dashboard")

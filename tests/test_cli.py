@@ -5,6 +5,7 @@ import pytest
 
 from tape import db
 from tape.cli import format_digest, main
+from tape.evaluate import PRICE_LOOKBACK_DAYS
 from tests.conftest import make_filing, make_score
 
 
@@ -89,6 +90,7 @@ def test_stats_rejects_zero_days(tmp_path, monkeypatch, capsys):
         ["backfill", "--days", "-5"],
         ["digest", "--hours", "0"],
         ["digest", "--hours", "-24"],
+        ["evaluate", "--days", "0"],
     ],
 )
 def test_rejects_non_positive_windows_before_touching_store(argv, tmp_path, monkeypatch, capsys):
@@ -231,3 +233,22 @@ def test_evaluate_with_too_few_outcomes_keeps_earlier_report(tmp_path, monkeypat
 
     assert main(["evaluate", "--skip-prices", "--out", str(out)]) == 0
     assert out.read_text() == '{"n": 25}'
+
+
+class _Stop(Exception):
+    pass
+
+
+@pytest.mark.parametrize(("argv", "expected"), [([], PRICE_LOOKBACK_DAYS), (["--days", "140"], 140)])
+def test_evaluate_passes_lookback_to_compute_outcomes(argv, expected, tmp_path, monkeypatch):
+    monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
+    seen = {}
+
+    def fake_compute(conn, prices, lookback_days):
+        seen["days"] = lookback_days
+        raise _Stop
+
+    monkeypatch.setattr("tape.evaluate.compute_outcomes", fake_compute)
+    with pytest.raises(_Stop):
+        main(["evaluate", *argv])
+    assert seen["days"] == expected

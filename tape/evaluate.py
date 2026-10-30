@@ -24,6 +24,9 @@ MARKET = "SPY"
 # Item codes a rule-writer would flag without any AI.
 RULE_ITEMS = {"1.01", "2.01", "2.02", "5.02"}
 BIG_MOVE = 0.03
+# Filings older than this are not priced on a normal run. One with a ticker Yahoo can't price
+# never gets an outcome, and without a bound it would drag the download window back forever.
+PRICE_LOOKBACK_DAYS = 30
 MIN_OUTCOMES = 20  # below this the bucket means and the shuffled baseline are mostly noise
 
 
@@ -65,7 +68,10 @@ def event_day(accepted_at: str, trading_days: list[date]) -> date | None:
     return trading_days[i] if i < len(trading_days) else None
 
 
-def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource) -> int:
+def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
+                     lookback_days: int = PRICE_LOOKBACK_DAYS, today: date | None = None) -> int:
+    """Price scored filings accepted in the last `lookback_days` that have no outcome yet."""
+    cutoff = (today or datetime.now(ET).date()) - timedelta(days=lookback_days)
     rows = conn.execute(
         """
         SELECT f.accession_no, f.ticker, f.accepted_at FROM filings f
@@ -73,6 +79,7 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource) -> int:
         WHERE o.accession_no IS NULL AND f.ticker IS NOT NULL
         """
     ).fetchall()
+    rows = [r for r in rows if datetime.fromisoformat(r["accepted_at"]).astimezone(ET).date() >= cutoff]
     if not rows:
         return 0
     first = min(datetime.fromisoformat(r["accepted_at"]).date() for r in rows) - timedelta(days=7)
@@ -80,7 +87,9 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource) -> int:
     tickers = sorted({r["ticker"] for r in rows} | {MARKET})
     closes = prices.closes(tickers, first, last).sort_index()
     trading_days = [d for d in closes.index if pd.notna(closes.at[d, MARKET])]
-    returns = closes.loc[trading_days].pct_change()
+    # No filling: a missing prior close must leave the return NaN rather than fold several days'
+    # move into one (pandas 2.x pads by default, pandas 3 doesn't).
+    returns = closes.loc[trading_days].pct_change(fill_method=None)
 
     written = 0
     for r in rows:

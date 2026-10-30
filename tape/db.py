@@ -112,6 +112,12 @@ MIGRATIONS: list[str] = [
         last_attempt_at TEXT NOT NULL
     );
     """,
+    # 5: date-range queries compare julianday(accepted_at), since EDGAR's offsets vary (-04:00/-05:00) and a
+    # plain text comparison would misorder them. idx_filings_accepted is on the bare column, so those
+    # queries scanned the whole table; an index on the same expression lets them seek instead.
+    """
+    CREATE INDEX idx_filings_accepted_jd ON filings(julianday(accepted_at));
+    """,
 ]
 
 # Failed scoring attempts before a filing is left out of unscored(). Enough to ride out a Jev incident
@@ -207,6 +213,22 @@ def upsert_filing(conn: sqlite3.Connection, f: Filing) -> None:
         (f.accession_no, f.cik, f.ticker, f.company, f.form, ",".join(f.items), f.accepted_at, f.url,
          f.clean_text),
     )
+
+
+def missing_tickers(conn: sqlite3.Connection, since_iso: str) -> list[sqlite3.Row]:
+    """Filings accepted at or after `since_iso` that were stored without a ticker."""
+    return conn.execute(
+        """
+        SELECT accession_no, cik FROM filings
+        WHERE ticker IS NULL AND julianday(accepted_at) >= julianday(?)
+        ORDER BY accepted_at
+        """,
+        (since_iso,),
+    ).fetchall()
+
+
+def set_ticker(conn: sqlite3.Connection, accession_no: str, ticker: str) -> None:
+    conn.execute("UPDATE filings SET ticker = ? WHERE accession_no = ? AND ticker IS NULL", (ticker, accession_no))
 
 
 def upsert_score(conn: sqlite3.Connection, s: ScoreRow) -> None:
@@ -361,17 +383,26 @@ def pending_briefs(conn: sqlite3.Connection, since_iso: str | None = None) -> li
     counts as none). With `since_iso`, only those EDGAR accepted at or after it:
     a backfill or reroute marks old filings 'now' too, and those are not news any more.
     """
-    return conn.execute(
-        """
+    return conn.execute(*_pending_briefs_query(since_iso)).fetchall()
+
+
+def _pending_briefs_query(since_iso: str | None) -> tuple[str, tuple[str, ...]]:
+    # The date filter is added only when asked for. Written as `? IS NULL OR julianday(...) >= ...`
+    # it kept SQLite from seeking on idx_filings_accepted_jd, so every pass walked the whole history
+    # of 'now' routes instead of just the window.
+    since_clause = ""
+    params: tuple[str, ...] = ()
+    if since_iso is not None:
+        since_clause, params = "AND julianday(f.accepted_at) >= julianday(?)", (since_iso,)
+    sql = f"""
         SELECT f.accession_no, f.ticker, f.company, f.items, f.accepted_at, f.url,
                s.materiality, s.event, s.direction, s.surprise, s.materiality_confidence
         FROM briefs b JOIN filings f USING (accession_no) JOIN scores s USING (accession_no)
         WHERE b.route = 'now' AND trim(COALESCE(b.brief_text, ''), ' ' || char(9, 10, 13)) = ''
-          AND (? IS NULL OR julianday(f.accepted_at) >= julianday(?))
+          {since_clause}
         ORDER BY s.materiality DESC
-        """,
-        (since_iso, since_iso),
-    ).fetchall()
+        """
+    return sql, params
 
 
 def digest_since(conn: sqlite3.Connection, since_iso: str) -> list[sqlite3.Row]:

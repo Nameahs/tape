@@ -86,7 +86,7 @@ Four SQLite tables, all keyed on the EDGAR accession number so every stage can b
 | `briefs` | accession_no, route (now / digest / log), brief_text, sent_at | Only routed filings get a brief |
 | `outcomes` | accession_no, event_day, stock_return, market_return, abnormal_return, abs_abnormal_return | Filled by the evaluator once the next day's prices exist |
 
-Filings without a listed ticker (private debt issuers, funds) are stored but skipped in the evaluation.
+Filings without a listed ticker (private debt issuers, funds) are stored but skipped in the evaluation. If the ticker map can't be downloaded when a filing is fetched, the filing is stored without one and each pass fills it in from the map for up to a week afterwards.
 
 ## Evaluation
 

@@ -35,8 +35,12 @@ FEED_URL = (
 TICKERS_URL = SEC + "/files/company_tickers.json"
 TICKERS_FILE = "company_tickers.json"
 TICKERS_MAX_AGE = 24 * 3600  # the SEC regenerates the file daily
+TICKERS_RETRY_AFTER = 300.0  # after a failed download, don't try again in this process for this long
 MAX_ATTEMPTS = 4
 MAX_RETRY_AFTER = 60.0  # never wait longer than this on one Retry-After
+# 429 and 503 mean slow down. 500, 502 and 504 come from EDGAR's front end during busy
+# periods and usually clear within seconds, so they get the same backoff.
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +87,7 @@ class Edgar:
         self._client.headers.update({"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"})
         self._throttle = Throttle(per_second)
         self._tickers: dict[str, str] | None = None
+        self._tickers_failed_at: float | None = None
 
     def get(self, url: str) -> httpx.Response:
         for attempt in range(MAX_ATTEMPTS):
@@ -96,8 +101,8 @@ class Edgar:
                 log.warning("EDGAR request failed, retrying: %s", url, exc_info=True)
                 time.sleep(2**attempt)
                 continue
-            # 429 and 503 mean slow down; back off and retry, unless this was the last try.
-            if resp.status_code in (429, 503) and attempt < MAX_ATTEMPTS - 1:
+            # Back off and retry transient statuses, unless this was the last try.
+            if resp.status_code in RETRY_STATUSES and attempt < MAX_ATTEMPTS - 1:
                 time.sleep(_retry_delay(resp, attempt))
                 continue
             resp.raise_for_status()
@@ -122,11 +127,29 @@ class Edgar:
     # Details -----------------------------------------------------------------------------
 
     def ticker_for(self, cik: str) -> str | None:
+        """The ticker for `cik`, or None if it has none or the ticker map can't be loaded right now.
+
+        A failed download (with no cached copy to fall back on) must not fail the filing that
+        happened to ask first, and must not leave an empty map behind for the rest of the
+        process. We return None and try again after TICKERS_RETRY_AFTER.
+        """
         if self._tickers is None:
-            self._tickers = {}
-            for row in self._ticker_rows().values():
+            failed_at = self._tickers_failed_at
+            if failed_at is not None and time.monotonic() - failed_at < TICKERS_RETRY_AFTER:
+                return None
+            try:
+                rows = self._ticker_rows()
+            except (httpx.HTTPError, ValueError):
+                self._tickers_failed_at = time.monotonic()
+                log.warning("could not load the ticker map; storing filings without tickers for now",
+                            exc_info=True)
+                return None
+            tickers: dict[str, str] = {}
+            for row in rows.values():
                 # First listing wins; it is usually the common stock.
-                self._tickers.setdefault(f"{int(row['cik_str']):010d}", row["ticker"])
+                tickers.setdefault(f"{int(row['cik_str']):010d}", row["ticker"])
+            self._tickers = tickers
+            self._tickers_failed_at = None
         return self._tickers.get(cik)
 
     def _ticker_rows(self) -> dict:

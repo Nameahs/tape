@@ -67,6 +67,26 @@ def test_pending_briefs_since_skips_old_filings(conn):
     assert db.pending_briefs(conn, "2026-10-13T20:05:01+00:00") == []
 
 
+def test_pending_briefs_since_seeks_on_the_julianday_index(conn):
+    # A history of old 'now' routes (backfills, reroutes) with a few recent ones. With statistics in
+    # place the windowed query should start from the recent filings, not walk every 'now' brief.
+    for n in range(300):
+        f = make_filing(n, accepted_at=f"2026-{1 + n // 30:02d}-{1 + n % 28:02d}T10:00:00-04:00")
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 4.0))
+        db.set_route(conn, f.accession_no, "now")
+    conn.execute("ANALYZE")
+
+    sql, params = db._pending_briefs_query("2026-10-20T00:00:00+00:00")
+    plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, params))
+    assert "USING INDEX idx_filings_accepted_jd" in plan
+
+
+def test_pending_briefs_without_since_has_no_date_filter():
+    sql, params = db._pending_briefs_query(None)
+    assert "julianday" not in sql and params == ()
+
+
 def test_save_brief_requires_route(conn):
     db.upsert_filing(conn, make_filing())
     with pytest.raises(KeyError):
@@ -117,6 +137,34 @@ def test_migrates_a_version_zero_database_in_place(tmp_path):
     assert db.migrate(conn) == len(db.MIGRATIONS)  # idempotent on reconnect
     conn.close()
     assert db.connect(path).execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+
+
+def test_accepted_at_range_queries_seek_on_the_julianday_index(conn):
+    # Every date-range query compares julianday(accepted_at); without an index on that expression
+    # SQLite scans the whole filings table, text and all.
+    plan = " ".join(
+        r["detail"] for r in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT accession_no FROM filings "
+            "WHERE julianday(accepted_at) >= julianday(?) AND julianday(accepted_at) < julianday(?)",
+            ("2026-10-13T00:00:00+00:00", "2026-10-14T00:00:00+00:00"),
+        )
+    )
+    assert "USING INDEX idx_filings_accepted_jd" in plan
+
+
+def test_julianday_index_is_added_to_an_existing_database(tmp_path):
+    path = tmp_path / "v4.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA)
+    for script in db.MIGRATIONS[:4]:
+        old.executescript(script)
+    old.execute("PRAGMA user_version = 4")
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "idx_filings_accepted_jd" in names
 
 
 def test_score_confidence_round_trips(conn):
@@ -230,3 +278,20 @@ def test_clear_fetch_failure_and_stored_filings_are_not_given_up(conn):
 
     db.clear_fetch_failure(conn, gone)
     assert db.fetch_given_up(conn) == []
+
+
+def test_missing_tickers_only_returns_recent_filings_without_one(conn):
+    db.upsert_filing(conn, make_filing(1, ticker=None, accepted_at="2026-10-20T09:00:00-04:00"))
+    db.upsert_filing(conn, make_filing(2, ticker=None, accepted_at="2026-10-01T09:00:00-04:00"))
+    db.upsert_filing(conn, make_filing(3, accepted_at="2026-10-20T09:00:00-04:00"))
+    rows = db.missing_tickers(conn, "2026-10-13T00:00:00+00:00")
+    assert [r["accession_no"] for r in rows] == ["0000000001-26-000001"]
+
+
+def test_set_ticker_does_not_overwrite_an_existing_ticker(conn):
+    db.upsert_filing(conn, make_filing(1, ticker=None))
+    db.upsert_filing(conn, make_filing(2, ticker="OLD"))
+    db.set_ticker(conn, "0000000001-26-000001", "EXMP")
+    db.set_ticker(conn, "0000000001-26-000002", "NEW")
+    tickers = dict(conn.execute("SELECT accession_no, ticker FROM filings").fetchall())
+    assert tickers == {"0000000001-26-000001": "EXMP", "0000000001-26-000002": "OLD"}

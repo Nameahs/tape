@@ -149,6 +149,40 @@ def test_gives_up_on_429_without_a_final_sleep(monkeypatch):
     assert sleeps == [1.0, 2.0, 4.0]
 
 @respx.mock
+@pytest.mark.parametrize("status", [500, 502, 504])
+def test_retries_server_errors(monkeypatch, status):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    route = respx.get(FEED_URL)
+    route.side_effect = [httpx.Response(status), httpx.Response(200, text=(FIX / "feed.atom").read_text())]
+    assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_gives_up_on_repeated_504(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr("tape.edgar.Throttle.wait", lambda self: None)
+    monkeypatch.setattr("tape.edgar.time.sleep", sleeps.append)
+    route = respx.get(FEED_URL).respond(504)
+    with pytest.raises(httpx.HTTPStatusError):
+        Edgar("ua", per_second=1000).latest_8k()
+    assert route.call_count == 4
+    assert sleeps == [1.0, 2.0, 4.0]
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [400, 404, 501])
+def test_does_not_retry_permanent_errors(monkeypatch, status):
+    sleeps = []
+    monkeypatch.setattr("tape.edgar.time.sleep", sleeps.append)
+    route = respx.get(FEED_URL).respond(status)
+    with pytest.raises(httpx.HTTPStatusError):
+        Edgar("ua", per_second=1000).latest_8k()
+    assert route.call_count == 1
+    assert sleeps == []
+
+
+@respx.mock
 def test_daily_index_missing_on_weekend_is_empty():
     respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261011.idx").respond(404)
     assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 11)) == []
@@ -189,6 +223,33 @@ def test_stale_ticker_cache_used_when_refresh_fails(tmp_path, monkeypatch):
     os.utime(cache, (day_old, day_old))
     respx.get(TICKERS_URL).respond(500)
     assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "OLD"
+
+
+@respx.mock
+def test_ticker_download_failure_on_cold_cache_does_not_fail_fetch(tmp_path, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    _mock_filing(respx)
+    respx.get(TICKERS_URL).respond(500)
+    edgar = Edgar("ua", per_second=1000, cache_dir=tmp_path)
+    filing = edgar.fetch(FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX), 5000)
+    assert filing.ticker is None
+    assert filing.clean_text
+
+
+@respx.mock
+def test_ticker_map_is_retried_after_a_failed_download(tmp_path, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    clock = [1000.0]
+    monkeypatch.setattr("tape.edgar.time.monotonic", lambda: clock[0])
+    route = respx.get(TICKERS_URL)
+    route.side_effect = [httpx.Response(503)] * 4 + [httpx.Response(200, text=_tickers_text())]
+    edgar = Edgar("ua", per_second=1000, cache_dir=tmp_path)
+    assert edgar.ticker_for("0000000001") is None
+    assert edgar.ticker_for("0000000001") is None  # within the retry window: no new download
+    assert route.call_count == 4
+    clock[0] += 301
+    assert edgar.ticker_for("0000000001") == "EXMP"
+    assert route.call_count == 5
 
 
 @respx.mock
