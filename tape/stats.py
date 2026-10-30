@@ -12,6 +12,13 @@ from tape import db
 ET = ZoneInfo("America/New_York")
 ROUTES = ("now", "digest", "log")
 
+# Window spend. The WHERE clause must keep the exact julianday(scored_at) expression so SQLite can seek on
+# idx_scores_scored_jd; tests check the plan.
+SPEND_SQL = """
+SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost FROM scores
+WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) < julianday(?)
+"""
+
 
 @dataclass
 class DayStats:
@@ -67,13 +74,7 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) 
         if r["route"] in d.routes:
             d.routes[r["route"]] += 1
 
-    spend = conn.execute(
-        """
-        SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost FROM scores
-        WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) < julianday(?)
-        """,
-        (start_utc.isoformat(), end_utc.isoformat()),
-    ).fetchone()
+    spend = conn.execute(SPEND_SQL, (start_utc.isoformat(), end_utc.isoformat())).fetchone()
     return Stats(days=[buckets[k] for k in sorted(buckets)], spend_usd=float(spend["cost"]), calls=int(spend["n"]),
                  given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)))
 
