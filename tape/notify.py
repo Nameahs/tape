@@ -58,9 +58,18 @@ def send_telegram(text: str, token: str | None = None, chat_id: str | None = Non
     try:
         sent = 0
         for part in chunks(text):
-            _post(http, API.format(token=token), {
-                "chat_id": chat_id, "text": part, "disable_web_page_preview": True,
-            })
+            try:
+                _post(http, API.format(token=token), {
+                    "chat_id": chat_id, "text": part, "disable_web_page_preview": True,
+                })
+            except httpx.HTTPError as exc:
+                # HTTPX includes the request URL in status errors, which contains the bot token.
+                if token:
+                    exc.args = tuple(
+                        arg.replace(token, "***") if isinstance(arg, str) else arg
+                        for arg in exc.args
+                    )
+                raise
             sent += 1
         return sent
     finally:

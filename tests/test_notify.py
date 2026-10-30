@@ -163,3 +163,13 @@ def test_send_telegram_leaves_a_passed_client_open():
     send_telegram("hi", token="T", chat_id="42", client=client)
     assert not client.is_closed
     client.close()
+
+
+@respx.mock
+def test_send_telegram_redacts_token_from_http_error(sleeps):
+    token = "123456:secret-token"
+    respx.post(API.format(token=token)).respond(401, json={"ok": False})
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        send_telegram("hi", token=token, chat_id="42", client=httpx.Client())
+    assert "401" in str(exc_info.value)
+    assert token not in str(exc_info.value)

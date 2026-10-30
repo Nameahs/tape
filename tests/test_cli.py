@@ -1,4 +1,5 @@
 import json
+import logging
 
 import httpx
 import pytest
@@ -252,3 +253,25 @@ def test_evaluate_passes_lookback_to_compute_outcomes(argv, expected, tmp_path, 
     with pytest.raises(_Stop):
         main(["evaluate", *argv])
     assert seen["days"] == expected
+
+
+def test_verbose_suppresses_httpx_request_urls(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:secret-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
+    _seed(path)
+
+    httpx_logger = logging.getLogger("httpx")
+    monkeypatch.setattr(httpx_logger, "level", logging.INFO)
+    caplog.set_level(logging.INFO, logger="httpx")
+
+    def log_request(_text):
+        httpx_logger.info(
+            "HTTP Request: POST https://api.telegram.org/bot123456:secret-token/sendMessage"
+        )
+        return 1
+
+    monkeypatch.setattr("tape.notify.send_telegram", log_request)
+    assert main(["-v", "digest", "--send"]) == 0
+    assert "secret-token" not in caplog.text

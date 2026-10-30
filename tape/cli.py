@@ -211,6 +211,9 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if args.verbose:
+        # HTTPX logs full request URLs, which include the Telegram bot token.
+        logging.getLogger("httpx").setLevel(logging.WARNING)
     settings = Settings.from_env()
     conn = db.connect(settings.db_path)
     try:
