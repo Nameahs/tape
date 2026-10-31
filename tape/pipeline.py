@@ -12,7 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from tape import db
 from tape.config import Settings
-from tape.edgar import ET, Edgar, EmptyFilingError, FilingRef
+from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FilingRef
 from tape.route import route
 from tape.score import SystemOneClient, score_many
 
@@ -31,13 +31,16 @@ class PassStats:
     scored: int = 0
     routes: Counter = field(default_factory=Counter)
     cost_usd: float = 0.0
+    # EDGAR blocked us mid-pass, so some discovered filings were left for a later pass.
+    blocked: bool = False
 
     def summary(self) -> str:
         r = self.routes
-        return (
+        text = (
             f"discovered={self.discovered} fetched={self.fetched} errors={self.fetch_errors} "
             f"scored={self.scored} now={r['now']} digest={r['digest']} log={r['log']} cost=${self.cost_usd:.4f}"
         )
+        return text + " blocked" if self.blocked else text
 
 
 @contextmanager
@@ -74,6 +77,14 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
             continue
         try:
             filing = edgar.fetch(ref, settings.max_chars)
+        except EdgarBlockedError:
+            # The block covers the whole host, not this filing: every remaining fetch would fail the
+            # same way, keep the block alive and use up the filings' attempts until fetch_given_up
+            # dropped them for good. Stop here and leave them all for the next pass.
+            stats.blocked = True
+            log.warning("EDGAR is blocking requests; leaving the remaining filings for the next pass",
+                        exc_info=True)
+            return
         except Exception as e:
             stats.fetch_errors += 1
             with db.transaction(conn):
