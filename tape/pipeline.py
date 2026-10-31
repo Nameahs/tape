@@ -153,8 +153,18 @@ def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime |
 
 def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings) -> PassStats:
     with recorded(conn, "pass") as stats:
-        ingest(conn, edgar, edgar.latest_8k(), settings, stats)
-        fill_missing_tickers(conn, edgar)
+        try:
+            refs = edgar.latest_8k()
+        except EdgarBlockedError:
+            # Scoring doesn't touch EDGAR, so filings stored on an earlier pass (say, after a Jev
+            # timeout) still get scored and routed instead of waiting out the block.
+            stats.blocked = True
+            log.warning("EDGAR is blocking requests; skipping the feed this pass", exc_info=True)
+        else:
+            ingest(conn, edgar, refs, settings, stats)
+        if not stats.blocked:
+            # The ticker map is another EDGAR download; asking for it now would only prolong the block.
+            fill_missing_tickers(conn, edgar)
         score_and_route(conn, jev, settings, stats)
     return stats
 

@@ -158,6 +158,42 @@ def test_filings_seen_during_a_block_are_fetched_on_the_next_pass(conn):
     assert (again.fetched, again.scored, again.blocked) == (1, 1, False)
 
 
+def _store_recent_without_ticker(conn):
+    accepted = datetime.now(UTC).replace(microsecond=0).isoformat()
+    with db.transaction(conn):
+        db.upsert_filing(conn, make_filing(1, cik="0000000001", ticker=None, accepted_at=accepted))
+
+
+@respx.mock
+def test_blocked_feed_still_scores_stored_filings(conn, caplog):
+    # Stored on an earlier pass, but Jev timed out before it was scored; no ticker yet either.
+    _store_recent_without_ticker(conn)
+    feed = respx.get(FEED_URL).respond(403, text=BLOCK_PAGE)
+    tickers = respx.get(TICKERS_URL).respond(200, json={})
+    jev = FakeJev()
+
+    stats = run_pass(conn, Edgar("ua", per_second=1000), jev, Settings())
+
+    assert feed.call_count == 1
+    assert not tickers.called  # the ticker backfill would only add to the block
+    assert stats.blocked and (stats.discovered, stats.scored) == (0, 1)
+    assert len(jev.calls) == 1
+    assert caplog.text.count("EDGAR is blocking requests") == 1
+    [run] = _runs(conn)
+    assert run["error"] is None and run["scored"] == 1
+
+
+@respx.mock
+def test_block_mid_ingest_skips_the_ticker_backfill(conn):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    respx.get(INDEX).respond(403, text=BLOCK_PAGE)
+    tickers = respx.get(TICKERS_URL).respond(200, json={})
+    _store_recent_without_ticker(conn)
+    stats = run_pass(conn, Edgar("ua", per_second=1000), FakeJev(), Settings())
+    assert stats.blocked and not tickers.called
+    assert stats.scored == 1
+
+
 def _runs(conn):
     return [dict(r) for r in conn.execute("SELECT * FROM runs ORDER BY id")]
 
