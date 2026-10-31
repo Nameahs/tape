@@ -11,6 +11,7 @@ from tape.edgar import (
     FEED_URL,
     TICKERS_URL,
     Edgar,
+    EdgarBlockedError,
     EmptyFilingError,
     FilingRef,
     parse_feed,
@@ -180,6 +181,31 @@ def test_does_not_retry_permanent_errors(monkeypatch, status):
         Edgar("ua", per_second=1000).latest_8k()
     assert route.call_count == 1
     assert sleeps == []
+
+
+RATE_LIMIT_PAGE = (
+    "<html><head><title>SEC.gov | Request Rate Threshold Exceeded</title></head>"
+    "<body><h1>Your Request Originates from an Undeclared Automated Tool</h1></body></html>"
+)
+
+
+@respx.mock
+@pytest.mark.parametrize("marker", ["Request Rate Threshold Exceeded", "Undeclared Automated Tool"])
+def test_block_page_raises_blocked_error(marker):
+    route = respx.get(FEED_URL).respond(403, text=f"<html><body><h1>{marker}</h1></body></html>")
+    with pytest.raises(EdgarBlockedError) as exc:
+        Edgar("ua", per_second=1000).latest_8k()
+    assert isinstance(exc.value, httpx.HTTPStatusError)
+    assert exc.value.response.status_code == 403
+    assert route.call_count == 1  # a block lasts minutes; retrying within the request only extends it
+
+
+@respx.mock
+def test_plain_403_is_an_ordinary_status_error():
+    respx.get(FEED_URL).respond(403, text="<html><body>Forbidden</body></html>")
+    with pytest.raises(httpx.HTTPStatusError) as exc:
+        Edgar("ua", per_second=1000).latest_8k()
+    assert not isinstance(exc.value, EdgarBlockedError)
 
 
 @respx.mock
