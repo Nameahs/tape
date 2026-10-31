@@ -214,6 +214,23 @@ def test_daily_index_missing_on_weekend_is_empty():
     assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 11)) == []
 
 
+@respx.mock
+def test_daily_index_plain_403_is_empty(caplog):
+    respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261012.idx").respond(
+        403, text="<html><body>Forbidden</body></html>")
+    with caplog.at_level("INFO", logger="tape.edgar"):
+        assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 12)) == []
+    assert "no daily index for 2026-10-12 (HTTP 403)" in caplog.text
+
+
+@respx.mock
+def test_daily_index_block_page_raises():
+    respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261013.idx").respond(
+        403, text=RATE_LIMIT_PAGE)
+    with pytest.raises(EdgarBlockedError):
+        Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 13))
+
+
 def _tickers_text():
     return (FIX / "company_tickers.json").read_text()
 

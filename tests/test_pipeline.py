@@ -7,7 +7,7 @@ import respx
 
 from tape import db, pipeline
 from tape.config import Settings, Thresholds
-from tape.edgar import FEED_URL, TICKERS_URL, Edgar
+from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError
 from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route, today_et
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
@@ -141,6 +141,20 @@ def test_backfill_is_one_run(conn):
     _mock_filing(respx)
     backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=3, end=date(2026, 10, 12))
     assert [(r["kind"], r["scored"]) for r in _runs(conn)] == [("backfill", 1)]
+
+
+@respx.mock
+def test_backfill_blocked_by_edgar_fails_and_records_why(conn):
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.{}.idx"
+    respx.get(idx.format("20261008")).respond(200, text=(FIX / "form.idx").read_text())
+    _mock_filing(respx)
+    later = respx.get(idx.format("20261009")).respond(
+        403, text="<html><body>Request Rate Threshold Exceeded</body></html>")
+    with pytest.raises(EdgarBlockedError):
+        backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=4, end=date(2026, 10, 12))
+    assert later.called
+    (run,) = _runs(conn)
+    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
 
 
 def test_failed_pass_records_error_and_reraises(conn):

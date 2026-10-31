@@ -145,8 +145,12 @@ class Edgar:
         url = f"{SEC}/Archives/edgar/daily-index/{day.year}/QTR{q}/form.{day:%Y%m%d}.idx"
         try:
             return parse_form_index(self.get(url).text)
+        except EdgarBlockedError:
+            # Not a missing index: returning [] here would quietly drop a business day from a backfill.
+            raise
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (403, 404):  # weekends and holidays have no index
+                log.info("no daily index for %s (HTTP %d)", day, e.response.status_code)
                 return []
             raise
 
