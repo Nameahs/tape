@@ -41,12 +41,35 @@ MAX_RETRY_AFTER = 60.0  # never wait longer than this on one Retry-After
 # 429 and 503 mean slow down. 500, 502 and 504 come from EDGAR's front end during busy
 # periods and usually clear within seconds, so they get the same backoff.
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+# Phrases on the page EDGAR serves with a 403 when it blocks a client, as opposed to a plain 403
+# for a path that doesn't exist (daily indexes for weekends and holidays).
+BLOCK_MARKERS = ("Request Rate Threshold Exceeded", "Undeclared Automated Tool")
 
 log = logging.getLogger(__name__)
 
 _TITLE = re.compile(r"^(?P<form>\S+) - (?P<company>.+?) \((?P<cik>\d{10})\)")
 _ACC = re.compile(r"(\d{10}-\d{2}-\d{6})")
 _ITEM = re.compile(r"Item (\d\.\d{2})")
+
+
+class EdgarBlockedError(httpx.HTTPStatusError):
+    """EDGAR refused the request because it has blocked this client.
+
+    The SEC blocks a host for about 10 minutes after it exceeds the fair-access rate, and
+    refuses user agents without a contact outright. Every request fails the same way until
+    the block lifts, so callers should stop rather than treat it as a per-URL failure.
+    """
+
+
+def is_block_page(resp: httpx.Response) -> bool:
+    """True if `resp` is EDGAR's 403 block page rather than an ordinary 403."""
+    if resp.status_code != 403:
+        return False
+    try:
+        body = resp.text
+    except (UnicodeDecodeError, httpx.ResponseNotRead):
+        return False
+    return any(marker in body for marker in BLOCK_MARKERS)
 
 
 class EmptyFilingError(ValueError):
@@ -105,6 +128,9 @@ class Edgar:
             if resp.status_code in RETRY_STATUSES and attempt < MAX_ATTEMPTS - 1:
                 time.sleep(_retry_delay(resp, attempt))
                 continue
+            if is_block_page(resp):
+                raise EdgarBlockedError(f"EDGAR blocked the request for {url}: 403 block page",
+                                        request=resp.request, response=resp)
             resp.raise_for_status()
             return resp
         raise AssertionError("unreachable")  # the last attempt always returns or raises
@@ -119,8 +145,12 @@ class Edgar:
         url = f"{SEC}/Archives/edgar/daily-index/{day.year}/QTR{q}/form.{day:%Y%m%d}.idx"
         try:
             return parse_form_index(self.get(url).text)
+        except EdgarBlockedError:
+            # Not a missing index: returning [] here would quietly drop a business day from a backfill.
+            raise
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (403, 404):  # weekends and holidays have no index
+                log.info("no daily index for %s (HTTP %d)", day, e.response.status_code)
                 return []
             raise
 
