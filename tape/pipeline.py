@@ -53,12 +53,15 @@ def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
         yield stats
     except BaseException as e:
         error = f"{type(e).__name__}: {e}"
+        if isinstance(e, EdgarBlockedError):
+            # A block raised outside ingest (a backfill's daily index) never reached stats.blocked.
+            stats.blocked = True
         raise
     finally:
         try:
             db.finish_run(conn, run_id, discovered=stats.discovered, fetched=stats.fetched,
                           fetch_errors=stats.fetch_errors, scored=stats.scored, routes=stats.routes,
-                          cost_usd=stats.cost_usd, error=error)
+                          cost_usd=stats.cost_usd, blocked=stats.blocked, error=error)
         except Exception:
             # Bookkeeping must never mask the pass's own result or exception.
             log.exception("could not record run %s", run_id)
@@ -153,8 +156,18 @@ def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime |
 
 def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings) -> PassStats:
     with recorded(conn, "pass") as stats:
-        ingest(conn, edgar, edgar.latest_8k(), settings, stats)
-        fill_missing_tickers(conn, edgar)
+        try:
+            refs = edgar.latest_8k()
+        except EdgarBlockedError:
+            # Scoring doesn't touch EDGAR, so filings stored on an earlier pass (say, after a Jev
+            # timeout) still get scored and routed instead of waiting out the block.
+            stats.blocked = True
+            log.warning("EDGAR is blocking requests; skipping the feed this pass", exc_info=True)
+        else:
+            ingest(conn, edgar, refs, settings, stats)
+        if not stats.blocked:
+            # The ticker map is another EDGAR download; asking for it now would only prolong the block.
+            fill_missing_tickers(conn, edgar)
         score_and_route(conn, jev, settings, stats)
     return stats
 

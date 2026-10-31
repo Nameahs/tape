@@ -103,6 +103,21 @@ def test_counts_filings_fetching_gave_up_on(conn):
     assert "Gave up scoring" not in out
 
 
+def test_counts_runs_edgar_blocked_in_the_window(conn):
+    for started_at, blocked in [("2026-10-16T14:00:00Z", True), ("2026-10-16T14:05:00Z", False),
+                                ("2026-10-16T14:10:00Z", True), ("2026-10-01T14:00:00Z", True)]:
+        db.finish_run(conn, db.start_run(conn, "pass", started_at=started_at), blocked=blocked)
+
+    s = collect(conn, days=2, today=TODAY)
+    assert (s.runs, s.blocked_runs) == (3, 2)
+    assert "EDGAR rate-limited 2 of 3 runs in window" in format_stats(s).splitlines()
+
+
+def test_format_stats_omits_blocked_line_when_nothing_was_blocked(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z"))
+    assert "rate-limited" not in format_stats(collect(conn, days=1, today=TODAY))
+
+
 def test_spend_query_seeks_on_the_scored_at_index(conn):
     window = ("2026-10-01T00:00:00+00:00", "2026-10-08T00:00:00+00:00")
     plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + SPEND_SQL, window))

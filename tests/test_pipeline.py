@@ -158,6 +158,42 @@ def test_filings_seen_during_a_block_are_fetched_on_the_next_pass(conn):
     assert (again.fetched, again.scored, again.blocked) == (1, 1, False)
 
 
+def _store_recent_without_ticker(conn):
+    accepted = datetime.now(UTC).replace(microsecond=0).isoformat()
+    with db.transaction(conn):
+        db.upsert_filing(conn, make_filing(1, cik="0000000001", ticker=None, accepted_at=accepted))
+
+
+@respx.mock
+def test_blocked_feed_still_scores_stored_filings(conn, caplog):
+    # Stored on an earlier pass, but Jev timed out before it was scored; no ticker yet either.
+    _store_recent_without_ticker(conn)
+    feed = respx.get(FEED_URL).respond(403, text=BLOCK_PAGE)
+    tickers = respx.get(TICKERS_URL).respond(200, json={})
+    jev = FakeJev()
+
+    stats = run_pass(conn, Edgar("ua", per_second=1000), jev, Settings())
+
+    assert feed.call_count == 1
+    assert not tickers.called  # the ticker backfill would only add to the block
+    assert stats.blocked and (stats.discovered, stats.scored) == (0, 1)
+    assert len(jev.calls) == 1
+    assert caplog.text.count("EDGAR is blocking requests") == 1
+    [run] = _runs(conn)
+    assert run["error"] is None and run["scored"] == 1 and run["blocked"] == 1
+
+
+@respx.mock
+def test_block_mid_ingest_skips_the_ticker_backfill(conn):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    respx.get(INDEX).respond(403, text=BLOCK_PAGE)
+    tickers = respx.get(TICKERS_URL).respond(200, json={})
+    _store_recent_without_ticker(conn)
+    stats = run_pass(conn, Edgar("ua", per_second=1000), FakeJev(), Settings())
+    assert stats.blocked and not tickers.called
+    assert stats.scored == 1
+
+
 def _runs(conn):
     return [dict(r) for r in conn.execute("SELECT * FROM runs ORDER BY id")]
 
@@ -175,7 +211,7 @@ def test_each_pass_is_recorded(conn):
         ("pass", 1, 1, 1, 1), ("pass", 1, 0, 0, 0),
     ]
     assert runs[0]["cost_usd"] == pytest.approx(first.cost_usd)
-    assert all(r["finished_at"] and r["error"] is None for r in runs)
+    assert all(r["finished_at"] and r["error"] is None and not r["blocked"] for r in runs)
 
 
 @respx.mock
@@ -198,7 +234,7 @@ def test_backfill_blocked_by_edgar_fails_and_records_why(conn):
         backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=4, end=date(2026, 10, 12))
     assert later.called
     (run,) = _runs(conn)
-    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
+    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1 and run["blocked"] == 1
 
 
 @respx.mock
@@ -220,7 +256,7 @@ def test_backfill_blocked_mid_day_scores_what_it_has_then_fails(conn):
     assert blocked_index.call_count == 1
     assert not next_day.called  # no more requests once blocked
     (run,) = _runs(conn)
-    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
+    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1 and run["blocked"] == 1
     assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
 
 

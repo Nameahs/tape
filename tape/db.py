@@ -123,6 +123,11 @@ MIGRATIONS: list[str] = [
     """
     CREATE INDEX idx_scores_scored_jd ON scores(julianday(scored_at));
     """,
+    # 7: whether EDGAR's rate-limit block cut the run short. A blocked pass otherwise looks like a quiet one
+    # with fewer fetches, and `tape stats` couldn't say how often it happens.
+    """
+    ALTER TABLE runs ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 # Failed scoring attempts before a filing is left out of unscored(). Enough to ride out a Jev incident
@@ -285,17 +290,18 @@ def start_run(conn: sqlite3.Connection, kind: str, started_at: str | None = None
 
 def finish_run(conn: sqlite3.Connection, run_id: int, *, discovered: int = 0, fetched: int = 0,
                fetch_errors: int = 0, scored: int = 0, routes: Mapping[str, int] | None = None,
-               cost_usd: float = 0.0, error: str | None = None, finished_at: str | None = None) -> None:
+               cost_usd: float = 0.0, blocked: bool = False, error: str | None = None,
+               finished_at: str | None = None) -> None:
     routes = routes or {}
     with transaction(conn):
         conn.execute(
             """
             UPDATE runs SET finished_at = ?, discovered = ?, fetched = ?, fetch_errors = ?, scored = ?,
-                routed_now = ?, routed_digest = ?, routed_log = ?, cost_usd = ?, error = ?
+                routed_now = ?, routed_digest = ?, routed_log = ?, cost_usd = ?, blocked = ?, error = ?
             WHERE id = ?
             """,
             (finished_at or _utc_now(), discovered, fetched, fetch_errors, scored, routes.get("now", 0),
-             routes.get("digest", 0), routes.get("log", 0), cost_usd, error, run_id),
+             routes.get("digest", 0), routes.get("log", 0), cost_usd, int(blocked), error, run_id),
         )
 
 
