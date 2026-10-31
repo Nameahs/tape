@@ -7,7 +7,7 @@ import respx
 
 from tape import db, pipeline
 from tape.config import Settings, Thresholds
-from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError
+from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError, FilingRef
 from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route, today_et
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
@@ -114,6 +114,50 @@ def test_http_error_on_fetch_counts_as_a_failed_attempt(conn):
     assert attempts == 1 and error.startswith("HTTPStatusError")
 
 
+BLOCK_PAGE = "<html><body>Request Rate Threshold Exceeded</body></html>"
+
+
+def _refs(n):
+    return [FilingRef(f"0000000009-26-00000{i}", "0000000009", "Blocked Co", "8-K",
+                      f"https://www.sec.gov/Archives/edgar/data/9/{i}/index.htm") for i in range(1, n + 1)]
+
+
+@respx.mock
+def test_ingest_stops_at_an_edgar_block_without_recording_failures(conn, caplog):
+    first, second, third = _refs(3)
+    respx.get(first.index_url).respond(404)
+    blocked = respx.get(second.index_url).respond(403, text=BLOCK_PAGE)
+    untouched = respx.get(third.index_url).respond(200, text=(FIX / "index.htm").read_text())
+    stats = PassStats()
+
+    pipeline.ingest(conn, Edgar("ua", per_second=1000), [first, second, third], Settings(), stats)
+
+    assert blocked.call_count == 1 and not untouched.called
+    assert stats.blocked and stats.fetch_errors == 1  # the 404 still counts; the block does not
+    assert [r["accession_no"] for r in conn.execute("SELECT accession_no FROM fetch_failures")] == [
+        first.accession_no]
+    assert caplog.text.count("EDGAR is blocking requests") == 1
+    assert "blocked" in stats.summary()
+
+
+@respx.mock
+def test_filings_seen_during_a_block_are_fetched_on_the_next_pass(conn):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    index = respx.get(INDEX)
+    edgar, jev, settings = Edgar("ua", per_second=1000), FakeJev(), Settings()
+
+    index.respond(403, text=BLOCK_PAGE)
+    for _ in range(db.MAX_FETCH_ATTEMPTS + 1):
+        stats = run_pass(conn, edgar, jev, settings)
+        assert (stats.fetched, stats.fetch_errors, stats.blocked) == (0, 0, True)
+    assert db.fetch_given_up(conn) == []
+
+    index.respond(200, text=(FIX / "index.htm").read_text())
+    again = run_pass(conn, edgar, jev, settings)
+    assert (again.fetched, again.scored, again.blocked) == (1, 1, False)
+
+
 def _runs(conn):
     return [dict(r) for r in conn.execute("SELECT * FROM runs ORDER BY id")]
 
@@ -155,6 +199,29 @@ def test_backfill_blocked_by_edgar_fails_and_records_why(conn):
     assert later.called
     (run,) = _runs(conn)
     assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
+
+
+@respx.mock
+def test_backfill_blocked_mid_day_scores_what_it_has_then_fails(conn):
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.{}.idx"
+    form_idx = (FIX / "form.idx").read_text()
+    respx.get(idx.format("20261008")).respond(200, text=form_idx)
+    _mock_filing(respx)
+    # The 9th lists a new filing whose index page is blocked.
+    respx.get(idx.format("20261009")).respond(200, text=form_idx.replace("26-000101", "26-000102"))
+    blocked_index = respx.get(
+        "https://www.sec.gov/Archives/edgar/data/1/000000000126000102/0000000001-26-000102-index.htm"
+    ).respond(403, text=BLOCK_PAGE)
+    next_day = respx.get(idx.format("20261012"))
+
+    with pytest.raises(EdgarBlockedError):
+        backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=5, end=date(2026, 10, 13))
+
+    assert blocked_index.call_count == 1
+    assert not next_day.called  # no more requests once blocked
+    (run,) = _runs(conn)
+    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
 
 
 def test_failed_pass_records_error_and_reraises(conn):
