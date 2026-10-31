@@ -102,3 +102,21 @@ def test_jev_price_must_not_be_negative(monkeypatch):
 def test_jev_price_may_be_zero(monkeypatch):
     monkeypatch.setenv("TAPE_JEV_PRICE_PER_M", "0")
     assert Settings.from_env().jev_input_price_per_m == 0.0
+
+
+@pytest.mark.parametrize("ua", ["Tape you@example.com", "  Acme Research ops@acme.co  ", "a@b.io"])
+def test_require_contact_accepts_a_name_and_email(ua):
+    from tape.config import require_contact
+
+    assert require_contact(ua) == ua.strip()
+
+
+@pytest.mark.parametrize(
+    "ua",
+    [Settings().user_agent, "", "   ", "Tape research bot", "@example.com", "Tape you@localhost", "Tape you@"],
+)
+def test_require_contact_rejects_a_missing_contact(ua):
+    from tape.config import require_contact
+
+    with pytest.raises(ValueError, match="TAPE_USER_AGENT"):
+        require_contact(ua)

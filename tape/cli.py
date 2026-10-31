@@ -9,7 +9,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 
 from tape import db
-from tape.config import Settings
+from tape.config import Settings, require_contact
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +17,8 @@ log = logging.getLogger(__name__)
 def _edgar(settings: Settings):
     from tape.edgar import Edgar
 
-    return Edgar(settings.user_agent, cache_dir=settings.db_path.parent)
+    # Only commands that talk to EDGAR need a declared contact; stats, digest and pending don't.
+    return Edgar(require_contact(settings.user_agent), cache_dir=settings.db_path.parent)
 
 
 def _jev(settings: Settings):
