@@ -19,6 +19,11 @@ SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost FROM scores
 WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) < julianday(?)
 """
 
+RUNS_SQL = """
+SELECT COUNT(*) AS n, COALESCE(SUM(blocked), 0) AS blocked FROM runs
+WHERE julianday(started_at) >= julianday(?) AND julianday(started_at) < julianday(?)
+"""
+
 
 @dataclass
 class DayStats:
@@ -39,6 +44,9 @@ class Stats:
     given_up: int = 0
     # Filings ingest stopped fetching (no text, or EDGAR kept erroring); never stored, so not in `days`.
     fetch_given_up: int = 0
+    # Pipeline runs started in the window, and how many of them EDGAR's rate limit cut short.
+    runs: int = 0
+    blocked_runs: int = 0
 
 
 def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) -> Stats:
@@ -74,9 +82,12 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) 
         if r["route"] in d.routes:
             d.routes[r["route"]] += 1
 
-    spend = conn.execute(SPEND_SQL, (start_utc.isoformat(), end_utc.isoformat())).fetchone()
+    window = (start_utc.isoformat(), end_utc.isoformat())
+    spend = conn.execute(SPEND_SQL, window).fetchone()
+    runs = conn.execute(RUNS_SQL, window).fetchone()
     return Stats(days=[buckets[k] for k in sorted(buckets)], spend_usd=float(spend["cost"]), calls=int(spend["n"]),
-                 given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)))
+                 given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)),
+                 runs=int(runs["n"]), blocked_runs=int(runs["blocked"]))
 
 
 def format_stats(s: Stats) -> str:
@@ -91,6 +102,8 @@ def format_stats(s: Stats) -> str:
     total_scored = sum(d.scored for d in s.days)
     lines.append(f"{'total':<10}  {total_filings:>7,}  {total_scored:>6,}")
     lines.append(f"Jev spend in window: ${s.spend_usd:.2f} over {s.calls:,} calls")
+    if s.blocked_runs:
+        lines.append(f"EDGAR rate-limited {s.blocked_runs:,} of {s.runs:,} runs in window")
     if s.given_up:
         lines.append(
             f"Gave up scoring {s.given_up:,} filing(s) after {db.MAX_SCORE_ATTEMPTS} failed attempts "

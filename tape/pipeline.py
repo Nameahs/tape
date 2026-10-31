@@ -53,12 +53,15 @@ def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
         yield stats
     except BaseException as e:
         error = f"{type(e).__name__}: {e}"
+        if isinstance(e, EdgarBlockedError):
+            # A block raised outside ingest (a backfill's daily index) never reached stats.blocked.
+            stats.blocked = True
         raise
     finally:
         try:
             db.finish_run(conn, run_id, discovered=stats.discovered, fetched=stats.fetched,
                           fetch_errors=stats.fetch_errors, scored=stats.scored, routes=stats.routes,
-                          cost_usd=stats.cost_usd, error=error)
+                          cost_usd=stats.cost_usd, blocked=stats.blocked, error=error)
         except Exception:
             # Bookkeeping must never mask the pass's own result or exception.
             log.exception("could not record run %s", run_id)

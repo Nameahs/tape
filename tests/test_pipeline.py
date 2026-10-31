@@ -180,7 +180,7 @@ def test_blocked_feed_still_scores_stored_filings(conn, caplog):
     assert len(jev.calls) == 1
     assert caplog.text.count("EDGAR is blocking requests") == 1
     [run] = _runs(conn)
-    assert run["error"] is None and run["scored"] == 1
+    assert run["error"] is None and run["scored"] == 1 and run["blocked"] == 1
 
 
 @respx.mock
@@ -211,7 +211,7 @@ def test_each_pass_is_recorded(conn):
         ("pass", 1, 1, 1, 1), ("pass", 1, 0, 0, 0),
     ]
     assert runs[0]["cost_usd"] == pytest.approx(first.cost_usd)
-    assert all(r["finished_at"] and r["error"] is None for r in runs)
+    assert all(r["finished_at"] and r["error"] is None and not r["blocked"] for r in runs)
 
 
 @respx.mock
@@ -234,7 +234,7 @@ def test_backfill_blocked_by_edgar_fails_and_records_why(conn):
         backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=4, end=date(2026, 10, 12))
     assert later.called
     (run,) = _runs(conn)
-    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
+    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1 and run["blocked"] == 1
 
 
 @respx.mock
@@ -256,7 +256,7 @@ def test_backfill_blocked_mid_day_scores_what_it_has_then_fails(conn):
     assert blocked_index.call_count == 1
     assert not next_day.called  # no more requests once blocked
     (run,) = _runs(conn)
-    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
+    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1 and run["blocked"] == 1
     assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
 
 

@@ -27,7 +27,7 @@ tape run                 # one pass: ingest new 8-Ks, score, route
 tape pending             # filings from the last 24h waiting for a brief (what the agent reads)
 tape brief ACC --text .. # save a brief the agent wrote
 tape digest [--send]     # material filings from the last 24h (optionally to Telegram)
-tape stats [--days 7]    # filings, scores, routes and Jev spend per day
+tape stats [--days 7]    # filings, scores, routes and Jev spend per day, plus EDGAR rate-limit blocks
 tape backfill --days 90  # score past filings for the evaluation
 tape evaluate            # prices (last 30 days; --days N), abnormal returns, metrics
 tape reroute             # re-apply tuned thresholds without re-scoring
