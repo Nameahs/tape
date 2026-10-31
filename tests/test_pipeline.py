@@ -201,6 +201,29 @@ def test_backfill_blocked_by_edgar_fails_and_records_why(conn):
     assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
 
 
+@respx.mock
+def test_backfill_blocked_mid_day_scores_what_it_has_then_fails(conn):
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.{}.idx"
+    form_idx = (FIX / "form.idx").read_text()
+    respx.get(idx.format("20261008")).respond(200, text=form_idx)
+    _mock_filing(respx)
+    # The 9th lists a new filing whose index page is blocked.
+    respx.get(idx.format("20261009")).respond(200, text=form_idx.replace("26-000101", "26-000102"))
+    blocked_index = respx.get(
+        "https://www.sec.gov/Archives/edgar/data/1/000000000126000102/0000000001-26-000102-index.htm"
+    ).respond(403, text=BLOCK_PAGE)
+    next_day = respx.get(idx.format("20261012"))
+
+    with pytest.raises(EdgarBlockedError):
+        backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=5, end=date(2026, 10, 13))
+
+    assert blocked_index.call_count == 1
+    assert not next_day.called  # no more requests once blocked
+    (run,) = _runs(conn)
+    assert run["error"].startswith("EdgarBlockedError:") and run["scored"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
+
+
 def test_failed_pass_records_error_and_reraises(conn):
     class DownEdgar:
         def latest_8k(self):

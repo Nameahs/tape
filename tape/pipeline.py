@@ -65,7 +65,12 @@ def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
 
 
 def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], settings: Settings,
-           stats: PassStats) -> None:
+           stats: PassStats) -> EdgarBlockedError | None:
+    """Fetch and store the new filings in `refs`.
+
+    Returns the EdgarBlockedError that cut the pass short, if EDGAR blocked us; the filings not
+    yet fetched are left for a later pass.
+    """
     refs = list(refs)
     stats.discovered += len(refs)
     accessions = [r.accession_no for r in refs]
@@ -77,14 +82,14 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
             continue
         try:
             filing = edgar.fetch(ref, settings.max_chars)
-        except EdgarBlockedError:
+        except EdgarBlockedError as e:
             # The block covers the whole host, not this filing: every remaining fetch would fail the
             # same way, keep the block alive and use up the filings' attempts until fetch_given_up
             # dropped them for good. Stop here and leave them all for the next pass.
             stats.blocked = True
             log.warning("EDGAR is blocking requests; leaving the remaining filings for the next pass",
                         exc_info=True)
-            return
+            return e
         except Exception as e:
             stats.fetch_errors += 1
             with db.transaction(conn):
@@ -100,6 +105,7 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
             db.upsert_filing(conn, filing)
             db.clear_fetch_failure(conn, ref.accession_no)
         stats.fetched += 1
+    return None
 
 
 def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Settings, stats: PassStats) -> None:
@@ -167,10 +173,14 @@ def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
             day = end - timedelta(days=offset)
             if day.weekday() >= 5:
                 continue
-            ingest(conn, edgar, edgar.daily_8k(day), settings, stats)
+            blocked = ingest(conn, edgar, edgar.daily_8k(day), settings, stats)
             # Score as we go so a long backfill can be interrupted without losing work.
             score_and_route(conn, jev, settings, stats)
             log.info("%s %s", day, stats.summary())
+            if blocked:
+                # Moving on to the next day would only extend the block, and finishing quietly would
+                # report a backfill that skipped filings as a success.
+                raise blocked
     return stats
 
 
