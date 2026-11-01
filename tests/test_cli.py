@@ -353,3 +353,31 @@ def test_other_errors_still_raise(tmp_path, monkeypatch):
     monkeypatch.setattr("tape.pipeline.backfill", broken)
     with pytest.raises(RuntimeError, match="bug"):
         main(["backfill", "--days", "1"])
+
+
+@respx.mock
+def test_run_with_feed_down_is_one_line_and_tempfail(tmp_path, monkeypatch, capsys):
+    path = _edgar_env(tmp_path, monkeypatch)
+    feed = respx.get(FEED_URL).respond(503)
+
+    assert main(["run"]) == EXIT_TEMPFAIL
+
+    assert feed.call_count > 1  # Edgar.get retried before giving up
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("EDGAR request failed (") and captured.err.endswith("; try again later\n")
+    assert "Traceback" not in captured.err
+    (run,) = _runs(path)
+    assert run["kind"] == "pass" and run["error"].startswith("HTTPStatusError:") and not run["blocked"]
+
+
+@respx.mock
+def test_backfill_with_edgar_unreachable_is_tempfail(tmp_path, monkeypatch, capsys):
+    path = _edgar_env(tmp_path, monkeypatch)
+    respx.get(url__regex=r"/daily-index/").mock(side_effect=httpx.ConnectTimeout("timed out"))
+
+    assert main(["backfill", "--days", "7"]) == EXIT_TEMPFAIL
+
+    assert "EDGAR request failed (timed out)" in capsys.readouterr().err
+    (run,) = _runs(path)
+    assert run["error"].startswith("ConnectTimeout:")

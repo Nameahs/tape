@@ -43,7 +43,18 @@ def _edgar_blocked(e: Exception) -> int:
     return EXIT_TEMPFAIL
 
 
+def _edgar_failed(e: Exception) -> int:
+    """Same for an EDGAR request that still failed after Edgar.get's retries: a timeout, or a feed
+    or daily index answering 5xx. Jev failures never get here; score_and_route handles those per
+    filing, so any httpx error escaping a pass came from EDGAR."""
+    log.info("EDGAR request failed", exc_info=e)
+    print(f"EDGAR request failed ({e}); try again later", file=sys.stderr)
+    return EXIT_TEMPFAIL
+
+
 def cmd_run(args, settings, conn) -> int:
+    import httpx
+
     from tape.edgar import EdgarBlockedError
     from tape.pipeline import run_pass
 
@@ -51,11 +62,15 @@ def cmd_run(args, settings, conn) -> int:
         stats = run_pass(conn, _edgar(settings), _jev(settings), settings)
     except EdgarBlockedError as e:
         return _edgar_blocked(e)
+    except httpx.HTTPError as e:
+        return _edgar_failed(e)
     print(stats.summary())
     return 0
 
 
 def cmd_backfill(args, settings, conn) -> int:
+    import httpx
+
     from tape.edgar import EdgarBlockedError
     from tape.pipeline import backfill
 
@@ -64,6 +79,8 @@ def cmd_backfill(args, settings, conn) -> int:
     except EdgarBlockedError as e:
         # The run is already recorded with its error; the days before the block stay scored.
         return _edgar_blocked(e)
+    except httpx.HTTPError as e:
+        return _edgar_failed(e)
     print(stats.summary())
     return 0
 
