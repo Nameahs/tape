@@ -34,6 +34,11 @@ tape reroute             # re-apply tuned thresholds without re-scoring
 tape dashboard           # writes out/dashboard.html
 ```
 
+`run` and `backfill` hold a lock (`tape.db.lock`, next to the store) for the whole pass, so a
+scheduled `tape run` that starts while a long backfill is going doesn't fetch and score the same
+filings a second time. It prints one line and exits 0 instead; a `tape backfill` that finds the
+lock held exits 1. The other commands only read the store, or write a single brief, and never wait.
+
 ## Configuration
 
 | Variable | Default | Purpose |
