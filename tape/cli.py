@@ -13,6 +13,9 @@ from tape.config import Settings, require_contact
 
 log = logging.getLogger(__name__)
 
+# sysexits.h EX_TEMPFAIL: the scheduler should simply try again later.
+EXIT_TEMPFAIL = 75
+
 
 def _edgar(settings: Settings):
     from tape.edgar import Edgar
@@ -32,17 +35,36 @@ def cmd_init(args, settings, conn) -> int:
     return 0
 
 
+def _edgar_blocked(e: Exception) -> int:
+    """Report an EDGAR block in one line. The agent reads this output, and a traceback would make
+    "try again in ten minutes" look like a bug; the traceback stays in the log under -v."""
+    log.info("EDGAR blocked the pass", exc_info=e)
+    print("EDGAR is blocking requests from this host; try again in about 10 minutes", file=sys.stderr)
+    return EXIT_TEMPFAIL
+
+
 def cmd_run(args, settings, conn) -> int:
+    from tape.edgar import EdgarBlockedError
     from tape.pipeline import run_pass
 
-    print(run_pass(conn, _edgar(settings), _jev(settings), settings).summary())
+    try:
+        stats = run_pass(conn, _edgar(settings), _jev(settings), settings)
+    except EdgarBlockedError as e:
+        return _edgar_blocked(e)
+    print(stats.summary())
     return 0
 
 
 def cmd_backfill(args, settings, conn) -> int:
+    from tape.edgar import EdgarBlockedError
     from tape.pipeline import backfill
 
-    print(backfill(conn, _edgar(settings), _jev(settings), settings, args.days).summary())
+    try:
+        stats = backfill(conn, _edgar(settings), _jev(settings), settings, args.days)
+    except EdgarBlockedError as e:
+        # The run is already recorded with its error; the days before the block stay scored.
+        return _edgar_blocked(e)
+    print(stats.summary())
     return 0
 
 
