@@ -275,3 +275,51 @@ def test_commands_without_edgar_ignore_the_user_agent(tmp_path, monkeypatch, cap
     assert main(["stats"]) == 0
     assert main(["pending"]) == 0
     assert main(["digest"]) == 0
+
+
+@pytest.mark.parametrize(("argv", "expected"), [(["run"], 0), (["backfill", "--days", "1"], 1)])
+def test_pipeline_commands_skip_when_another_pass_holds_the_lock(argv, expected, tmp_path, monkeypatch,
+                                                                  capsys):
+    from tape.lock import pipeline_lock
+
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+
+    def no_pass(*_a, **_k):
+        raise AssertionError("no EDGAR or Jev work while another pass holds the lock")
+
+    monkeypatch.setattr("tape.cli._edgar", no_pass)
+    monkeypatch.setattr("tape.cli._jev", no_pass)
+    with pipeline_lock(path):
+        assert main(argv) == expected
+    assert capsys.readouterr().err.strip() == (
+        "another tape run or backfill is in progress; skipping this pass")
+
+
+def test_pipeline_lock_is_released_after_a_pass_that_raises(tmp_path, monkeypatch):
+    from tape.lock import pipeline_lock
+
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("EDGAR exploded")
+
+    monkeypatch.setattr("tape.cli._edgar", boom)
+    with pytest.raises(RuntimeError):
+        main(["run"])
+    with pipeline_lock(path):
+        pass
+
+
+def test_read_only_commands_run_while_a_pass_holds_the_lock(tmp_path, monkeypatch, capsys):
+    from tape.lock import pipeline_lock
+
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+    with pipeline_lock(path):
+        assert main(["stats"]) == 0
+        assert main(["pending"]) == 0
+        assert main(["digest"]) == 0
+        assert main(["brief", acc, "--text", "Example Corp agreed to be acquired."]) == 0

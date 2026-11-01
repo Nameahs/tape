@@ -173,10 +173,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("init", help="create the SQLite store").set_defaults(fn=cmd_init)
-    sub.add_parser("run", help="one pass: ingest, score, route").set_defaults(fn=cmd_run)
+    # busy_exit: these commands take the pipeline lock, and this is their status if it's held.
+    # A scheduled run that finds a backfill going is a quiet pass (0); a backfill someone started
+    # by hand that didn't run should say so (1).
+    sub.add_parser("run", help="one pass: ingest, score, route").set_defaults(fn=cmd_run, busy_exit=0)
     b = sub.add_parser("backfill", help="ingest and score past business days")
     b.add_argument("--days", type=_positive_int, default=90)
-    b.set_defaults(fn=cmd_backfill)
+    b.set_defaults(fn=cmd_backfill, busy_exit=1)
     sub.add_parser("reroute", help="re-apply thresholds to stored scores").set_defaults(fn=cmd_reroute)
     pe = sub.add_parser("pending", help="recent filings waiting for a brief (JSON)")
     pe.add_argument("--max-age-hours", type=_positive_int, default=24,
@@ -215,9 +218,25 @@ def main(argv: list[str] | None = None) -> int:
     settings = Settings.from_env()
     conn = db.connect(settings.db_path)
     try:
-        return args.fn(args, settings, conn)
+        busy_exit = getattr(args, "busy_exit", None)
+        if busy_exit is None:
+            return args.fn(args, settings, conn)
+        return _run_locked(args, settings, conn, busy_exit)
     finally:
         conn.close()
+
+
+def _run_locked(args, settings, conn, busy_exit: int) -> int:
+    """Run a pipeline command under the pipeline lock, so an overlapping run or backfill doesn't
+    fetch and score (and pay Jev for) the same filings twice."""
+    from tape.lock import PipelineBusy, pipeline_lock
+
+    try:
+        with pipeline_lock(settings.db_path):
+            return args.fn(args, settings, conn)
+    except PipelineBusy:
+        print("another tape run or backfill is in progress; skipping this pass", file=sys.stderr)
+        return busy_exit
 
 
 if __name__ == "__main__":
