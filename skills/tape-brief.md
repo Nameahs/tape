@@ -14,6 +14,10 @@ filings it routed `now`. Do not re-score or second-guess the routing.
    your reply but keep going. If the summary ends in `blocked`, EDGAR is rate-limiting this
    host: new filings will be picked up on a later run once the block lifts (usually about ten
    minutes). Say so in one line and carry on; filings already stored were still scored.
+   If `tape run` instead exits with status 75 and prints one line starting `EDGAR`, EDGAR
+   could not be reached at all this run. Say so in one line, still run `tape pending` (earlier
+   filings may be waiting for a brief), and don't retry `tape run` yourself; the next scheduled
+   run will.
 2. Run `tape pending`. It prints a JSON list. If the list is empty, stop: send nothing.
 3. For each item, open its `url` (the EDGAR filing index), then open the main 8-K document and
    the EX-99.1 press release if there is one. Read enough to answer: what happened, how big
