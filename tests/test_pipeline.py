@@ -405,3 +405,4 @@ def test_run_pass_warns_about_a_feed_gap_and_still_ingests(conn, caplog):
     stats = run_pass(conn, FullFeed("ua"), FakeJev(), Settings())
     assert stats.feed_gap and stats.fetched == 1
     assert "may have been missed" in caplog.text
+    assert conn.execute("SELECT feed_gap FROM runs").fetchone()[0] == 1
