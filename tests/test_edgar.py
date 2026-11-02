@@ -8,6 +8,7 @@ import pytest
 import respx
 
 from tape.edgar import (
+    FEED_SIZE,
     FEED_URL,
     TICKERS_URL,
     Edgar,
@@ -56,7 +57,7 @@ def test_end_to_end_fetch_sends_user_agent():
     respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
     _mock_filing(respx)
     edgar = Edgar("Tape test test@example.com", per_second=1000)
-    [ref] = edgar.latest_8k()
+    [ref] = edgar.latest_8k().refs
     filing = edgar.fetch(ref, max_chars=5000)
     assert filing.ticker == "EXMP"  # first listing wins over the preferred share
     assert filing.items == ("5.02", "9.01")
@@ -97,7 +98,7 @@ def test_retries_on_429(monkeypatch):
     monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
     route = respx.get(FEED_URL)
     route.side_effect = [httpx.Response(429), httpx.Response(200, text=(FIX / "feed.atom").read_text())]
-    assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
+    assert len(Edgar("ua", per_second=1000).latest_8k().refs) == 1
 
 
 @respx.mock
@@ -109,7 +110,7 @@ def test_retries_transport_errors(monkeypatch):
         httpx.ConnectError("reset"),
         httpx.Response(200, text=(FIX / "feed.atom").read_text()),
     ]
-    assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
+    assert len(Edgar("ua", per_second=1000).latest_8k().refs) == 1
     assert route.call_count == 3
 
 
@@ -134,7 +135,7 @@ def test_honours_retry_after(monkeypatch):
         httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}),
         httpx.Response(200, text=(FIX / "feed.atom").read_text()),
     ]
-    assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
+    assert len(Edgar("ua", per_second=1000).latest_8k().refs) == 1
     assert sleeps == [7.0, 60.0, 4.0]  # as asked, capped, then backoff for a date we don't parse
 
 
@@ -155,7 +156,7 @@ def test_retries_server_errors(monkeypatch, status):
     monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
     route = respx.get(FEED_URL)
     route.side_effect = [httpx.Response(status), httpx.Response(200, text=(FIX / "feed.atom").read_text())]
-    assert len(Edgar("ua", per_second=1000).latest_8k()) == 1
+    assert len(Edgar("ua", per_second=1000).latest_8k().refs) == 1
     assert route.call_count == 2
 
 
@@ -309,6 +310,19 @@ _CO_REG_ENTRY = """<entry>
 <summary type="html"> &lt;b&gt;AccNo:&lt;/b&gt; 0000000004-26-000011</summary>
 <id>urn:tag:sec.gov,2008:accession-number=0000000004-26-000011</id>
 </entry>"""
+
+
+@respx.mock
+@pytest.mark.parametrize(("entries", "full"), [(FEED_SIZE - 1, False), (FEED_SIZE, True)])
+def test_latest_8k_reports_a_full_feed_counting_every_entry(entries, full):
+    # Amendments are dropped from refs but still take up room on the page.
+    body = "".join(
+        f"<entry><title>8-K/A - Example Corp (0000000001) (Filer)</title><id>0000000001-26-{n:06d}</id></entry>"
+        for n in range(entries)
+    )
+    respx.get(FEED_URL).respond(200, text=f'<feed xmlns="http://www.w3.org/2005/Atom">{body}</feed>')
+    page = Edgar("ua", per_second=1000).latest_8k()
+    assert page.refs == [] and page.full is full
 
 
 def test_parse_feed_dedupes_co_registrants():

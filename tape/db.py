@@ -211,6 +211,10 @@ def known_accessions(conn: sqlite3.Connection, accessions: list[str]) -> set[str
     return {r[0] for r in rows}
 
 
+def has_filings(conn: sqlite3.Connection) -> bool:
+    return conn.execute("SELECT EXISTS (SELECT 1 FROM filings)").fetchone()[0] == 1
+
+
 def upsert_filing(conn: sqlite3.Connection, f: Filing) -> None:
     conn.execute(
         """

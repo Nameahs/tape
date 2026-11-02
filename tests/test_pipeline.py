@@ -7,8 +7,8 @@ import respx
 
 from tape import db, pipeline
 from tape.config import Settings, Thresholds
-from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError, FilingRef
-from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route, today_et
+from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError, FeedPage, FilingRef
+from tape.pipeline import PassStats, backfill, feed_gap, rescore_routes, run_pass, score_and_route, today_et
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
 from tests.test_edgar import FIX, INDEX, _index_without_documents, _mock_filing
@@ -360,3 +360,48 @@ def test_fill_missing_tickers_skips_old_filings(conn):
     assert pipeline.fill_missing_tickers(conn, Tickers(), now=datetime(2026, 10, 21, tzinfo=UTC)) == 1
     tickers = dict(conn.execute("SELECT accession_no, ticker FROM filings").fetchall())
     assert tickers == {"0000000001-26-000001": "EXMP", "0000000001-26-000002": None}
+
+
+def _ref(n: int) -> FilingRef:
+    return FilingRef(make_filing(n).accession_no, "0000000001", "Example Corp", "8-K", "https://example.test/i")
+
+
+@pytest.mark.parametrize(
+    ("stored", "refs", "full", "gap"),
+    [
+        pytest.param([1], [2, 3], True, True, id="full page, nothing stored from it"),
+        pytest.param([1], [1, 2], True, False, id="full page reaching a stored filing"),
+        pytest.param([1], [2, 3], False, False, id="short page holds everything there is"),
+        pytest.param([], [2, 3], True, False, id="first pass on an empty store"),
+        pytest.param([1], [], True, False, id="full page of amendments only"),
+    ],
+)
+def test_feed_gap(conn, stored, refs, full, gap):
+    for n in stored:
+        db.upsert_filing(conn, make_filing(n))
+    assert feed_gap(conn, FeedPage([_ref(n) for n in refs], full)) is gap
+
+
+def test_summary_keeps_blocked_last_after_a_gap():
+    assert PassStats(feed_gap=True).summary().endswith("cost=$0.0000 gap")
+    assert PassStats(feed_gap=True, blocked=True).summary().endswith(" gap blocked")
+    assert " gap" not in PassStats().summary()
+
+
+def test_run_pass_warns_about_a_feed_gap_and_still_ingests(conn, caplog):
+    db.upsert_filing(conn, make_filing(1))
+    conn.commit()
+
+    class FullFeed(Edgar):
+        def latest_8k(self):
+            return FeedPage([_ref(2)], True)
+
+        def fetch(self, ref, max_chars):
+            return make_filing(2)
+
+        def ticker_for(self, cik):
+            return None
+
+    stats = run_pass(conn, FullFeed("ua"), FakeJev(), Settings())
+    assert stats.feed_gap and stats.fetched == 1
+    assert "may have been missed" in caplog.text

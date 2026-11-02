@@ -28,9 +28,10 @@ from tape.db import Filing
 
 SEC = "https://www.sec.gov"
 ET = ZoneInfo("America/New_York")
+FEED_SIZE = 100  # the most entries one feed request asks for
 FEED_URL = (
     SEC + "/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include"
-    "&start=0&count=100&output=atom"
+    f"&start=0&count={FEED_SIZE}&output=atom"
 )
 TICKERS_URL = SEC + "/files/company_tickers.json"
 TICKERS_FILE = "company_tickers.json"
@@ -87,6 +88,14 @@ class FilingRef:
     index_url: str
 
 
+@dataclass(frozen=True)
+class FeedPage:
+    refs: list[FilingRef]
+    # Whether EDGAR returned as many entries as we asked for, amendments and co-registrants included,
+    # so older entries may have been cut off.
+    full: bool
+
+
 class Throttle:
     def __init__(self, per_second: float = 5.0) -> None:
         self._interval = 1.0 / per_second
@@ -137,8 +146,9 @@ class Edgar:
 
     # Discovery ---------------------------------------------------------------------------
 
-    def latest_8k(self) -> list[FilingRef]:
-        return parse_feed(self.get(FEED_URL).text)
+    def latest_8k(self) -> FeedPage:
+        xml = self.get(FEED_URL).text
+        return FeedPage(parse_feed(xml), len(feedparser.parse(xml).entries) >= FEED_SIZE)
 
     def daily_8k(self, day: date) -> list[FilingRef]:
         q = (day.month - 1) // 3 + 1
