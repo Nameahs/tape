@@ -57,6 +57,52 @@ def test_backfill_defaults_to_eastern_today(conn, monkeypatch):
 
 
 @respx.mock
+def test_backfill_fills_in_tickers_when_the_map_comes_back(conn, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    monkeypatch.setattr("tape.edgar.TICKERS_RETRY_AFTER", 0.0)
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261013.idx"
+    respx.get(idx).respond(200, text=(FIX / "form.idx").read_text())
+    _mock_filing(respx)
+    ok = httpx.Response(200, text=(FIX / "company_tickers.json").read_text())
+    respx.get(TICKERS_URL).side_effect = [httpx.Response(503)] * 4 + [ok]
+
+    # Fixed dates, so the filing is well outside the week a pass looks back whenever this runs.
+    backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
+
+    assert conn.execute("SELECT ticker FROM filings").fetchone()[0] == "EXMP"
+
+
+@respx.mock
+def test_rerunning_a_backfill_repairs_tickers_in_its_span(conn):
+    # Tuesday's index lists Friday evening's filing when Monday is a holiday, so the window reaches it.
+    db.upsert_filing(conn, make_filing(1, cik="0000000001", ticker=None, accepted_at="2026-10-09T18:00:00-04:00"))
+    db.upsert_filing(conn, make_filing(2, cik="0000000001", ticker=None, accepted_at="2026-10-08T18:00:00-04:00"))
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261013.idx"
+    respx.get(idx).respond(200, text=(FIX / "form.idx").read_text().replace("26-000101", "26-000001"))
+    respx.get(TICKERS_URL).respond(200, text=(FIX / "company_tickers.json").read_text())
+
+    backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
+
+    tickers = dict(conn.execute("SELECT accession_no, ticker FROM filings").fetchall())
+    assert tickers["0000000001-26-000001"] == "EXMP"
+    assert tickers["0000000001-26-000002"] is None  # before the backfill's span
+
+
+@respx.mock
+def test_blocked_backfill_skips_the_ticker_fill(conn):
+    db.upsert_filing(conn, make_filing(1, cik="0000000001", ticker=None, accepted_at="2026-10-13T09:00:00-04:00"))
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261013.idx"
+    respx.get(idx).respond(200, text=(FIX / "form.idx").read_text())
+    respx.get(INDEX).respond(403, text=BLOCK_PAGE)
+    tickers = respx.get(TICKERS_URL).respond(200, json={})
+
+    with pytest.raises(EdgarBlockedError):
+        backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
+
+    assert not tickers.called
+
+
+@respx.mock
 def test_reroute_uses_new_thresholds(conn):
     respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
     _mock_filing(respx)
