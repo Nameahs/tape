@@ -11,6 +11,7 @@ from typing import Any, Protocol
 
 from typesafe_sdk import Choice, Noul, RetryPolicy, Score
 
+from tape.config import ConfigError
 from tape.db import ScoreRow
 
 log = logging.getLogger(__name__)
@@ -180,7 +181,10 @@ def retry_policy(max_retries: int = 4, budget_s: float = 60.0) -> RetryPolicy:
 
 
 def default_client(retry: RetryPolicy | None = None) -> SystemOneClient:
-    from typesafe_sdk import TypeSafeClient
+    from typesafe_sdk import TypeSafeClient, TypeSafeError
 
     # Reads TYPESAFE_API_KEY from the environment.
-    return TypeSafeClient(retry=retry or retry_policy())
+    try:
+        return TypeSafeClient(retry=retry or retry_policy())
+    except TypeSafeError as e:
+        raise ConfigError(str(e)) from e

@@ -50,6 +50,7 @@ agent credit. Jev scoring costs cents per day.
 | Status | Meaning |
 | --- | --- |
 | 0 | Pass finished. A summary ending in `blocked` means EDGAR blocked part of it; the rest was scored. |
+| 2 | Bad configuration or command line. One line on stderr starting `error:` (or argparse's usage message) says what to fix; rerunning won't help until it's fixed. |
 | 75 | EDGAR blocked the host or could not be reached. One line on stderr says which; try again later (a block usually lifts in about 10 minutes). The run is still recorded in `tape stats`. |
 | other | A real failure. Rerun with `-v` for the traceback. |
 

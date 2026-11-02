@@ -106,6 +106,53 @@ def test_rejects_non_positive_windows_before_touching_store(argv, tmp_path, monk
     assert not path.exists()
 
 
+def _config_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("TAPE_USER_AGENT", "Tape test@example.com")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "key")
+
+
+@pytest.mark.parametrize(
+    ("argv", "unset", "setenv", "expected"),
+    [
+        (["stats"], None, ("TAPE_MAX_CHARS", "abc"), "error: TAPE_MAX_CHARS: expected a whole number, got 'abc'"),
+        (["stats"], None, ("TAPE_BRIEF_NOW", "nan"), "error: TAPE_BRIEF_NOW: expected a finite number, got 'nan'"),
+        (["run"], None, ("TAPE_USER_AGENT", "Tape"), "error: TAPE_USER_AGENT must include a contact email"),
+        (["backfill", "--days", "1"], None, ("TAPE_USER_AGENT", "Tape"), "error: TAPE_USER_AGENT must include"),
+        (["run"], "TYPESAFE_API_KEY", None, "error: No API key was provided"),
+    ],
+)
+def test_bad_configuration_is_one_line_and_status_2(argv, unset, setenv, expected, tmp_path, monkeypatch, capsys):
+    _config_env(tmp_path, monkeypatch)
+    if unset:
+        monkeypatch.delenv(unset)
+    if setenv:
+        monkeypatch.setenv(*setenv)
+    assert main(argv) == 2
+    err = capsys.readouterr().err
+    assert err.startswith(expected)
+    assert len(err.strip().splitlines()) == 1
+
+
+def test_verbose_keeps_the_configuration_traceback(tmp_path, monkeypatch, caplog):
+    _config_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("TAPE_MAX_CHARS", "abc")
+    caplog.set_level(logging.INFO)
+    assert main(["-v", "stats"]) == 2
+    assert "Traceback" in caplog.text
+
+
+def test_other_value_errors_are_not_mistaken_for_configuration(tmp_path, monkeypatch):
+    _config_env(tmp_path, monkeypatch)
+
+    def broken(*_args):
+        raise ValueError("a bug")
+
+    monkeypatch.setattr("tape.stats.collect", broken)
+    with pytest.raises(ValueError, match="a bug"):
+        main(["stats"])
+
+
 def test_jev_client_gets_retry_settings(monkeypatch):
     from tape import cli, score
     from tape.config import Settings
@@ -258,7 +305,7 @@ def test_evaluate_passes_lookback_to_compute_outcomes(argv, expected, tmp_path, 
 
 
 @pytest.mark.parametrize("argv", [["run"], ["backfill", "--days", "1"]])
-def test_edgar_commands_require_a_contact_user_agent(argv, tmp_path, monkeypatch):
+def test_edgar_commands_require_a_contact_user_agent(argv, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
     monkeypatch.delenv("TAPE_USER_AGENT", raising=False)
 
@@ -266,8 +313,8 @@ def test_edgar_commands_require_a_contact_user_agent(argv, tmp_path, monkeypatch
         raise AssertionError("EDGAR should not be contacted")
 
     monkeypatch.setattr("tape.edgar.Edgar.get", no_network)
-    with pytest.raises(ValueError, match="TAPE_USER_AGENT"):
-        main(argv)
+    assert main(argv) == 2
+    assert "TAPE_USER_AGENT" in capsys.readouterr().err
 
 
 def test_commands_without_edgar_ignore_the_user_agent(tmp_path, monkeypatch, capsys):
