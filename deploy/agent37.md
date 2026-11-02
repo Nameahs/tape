@@ -38,6 +38,7 @@ If you would rather send the digest from a script, create a bot with @BotFather,
 
 | Schedule | Task given to the agent |
 | --- | --- |
+| 6:30 am, Mon to Fri | Run `tape backfill --days 4` (no briefs) |
 | Every 5 min, 7:00 am to 8:00 pm, Mon to Fri | "Use the tape-brief skill." |
 | 6:00 pm, Mon to Fri | "Use the tape-brief skill, including the evening digest." |
 | 9:00 pm, Mon to Fri | Run `tape evaluate && tape dashboard` (no briefs) |
@@ -45,11 +46,18 @@ If you would rather send the digest from a script, create a bot with @BotFather,
 Most 5-minute runs find nothing pending and end after two commands, so they cost almost no
 agent credit. Jev scoring costs cents per day.
 
+The 6:30 am backfill is the safety net for the feed, which only holds the latest 100 entries. Filings
+that scroll off between passes (overnight, or during an outage) are still in EDGAR's daily index, and
+this picks them up. When nothing was missed it costs one request per day read and no Jev calls. Four
+days reaches the previous Friday across a Monday holiday. A daily index is dated by filing date, so an
+8-K accepted after 5:30 pm appears in the next business day's index and is picked up a day later.
+A pass that thinks it missed something ends its summary with `gap`, and `tape stats` counts them.
+
 ### Exit status of `tape run` and `tape backfill`
 
 | Status | Meaning |
 | --- | --- |
-| 0 | Pass finished. A summary ending in `blocked` means EDGAR blocked part of it; the rest was scored. |
+| 0 | Pass finished. `blocked` at the end of the summary means EDGAR blocked part of it; the rest was scored. `gap` means filings may have scrolled off the feed before this pass. |
 | 75 | EDGAR blocked the host or could not be reached. One line on stderr says which; try again later (a block usually lifts in about 10 minutes). The run is still recorded in `tape stats`. |
 | other | A real failure. Rerun with `-v` for the traceback. |
 
