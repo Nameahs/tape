@@ -1,10 +1,13 @@
 import json
+import logging
 
 import httpx
 import pytest
+import respx
 
 from tape import db
-from tape.cli import format_digest, main
+from tape.cli import EXIT_TEMPFAIL, format_digest, main
+from tape.edgar import FEED_URL, EdgarBlockedError
 from tape.evaluate import PRICE_LOOKBACK_DAYS
 from tests.conftest import make_filing, make_score
 
@@ -275,3 +278,106 @@ def test_commands_without_edgar_ignore_the_user_agent(tmp_path, monkeypatch, cap
     assert main(["stats"]) == 0
     assert main(["pending"]) == 0
     assert main(["digest"]) == 0
+
+
+BLOCK_PAGE = "<html><body>Request Rate Threshold Exceeded</body></html>"
+
+
+def _edgar_env(tmp_path, monkeypatch):
+    from tests.fakes import FakeJev
+
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    monkeypatch.setenv("TAPE_USER_AGENT", "Tape test@example.com")
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda _s: None)
+    jev = FakeJev()
+    monkeypatch.setattr("tape.cli._jev", lambda _settings: jev)
+    return path
+
+
+def _runs(path):
+    conn = db.connect(path)
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM runs ORDER BY id")]
+    finally:
+        conn.close()
+
+
+@respx.mock
+def test_blocked_backfill_is_one_line_and_tempfail(tmp_path, monkeypatch, capsys):
+    path = _edgar_env(tmp_path, monkeypatch)
+    respx.get(url__regex=r"/daily-index/").respond(403, text=BLOCK_PAGE)
+
+    assert main(["backfill", "--days", "7"]) == EXIT_TEMPFAIL
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "EDGAR is blocking requests from this host; try again in about 10 minutes\n"
+    (run,) = _runs(path)
+    assert run["kind"] == "backfill" and run["blocked"] == 1
+    assert run["error"].startswith("EdgarBlockedError:")
+
+
+@respx.mock
+def test_blocked_backfill_keeps_traceback_in_verbose_log(tmp_path, monkeypatch, capsys, caplog):
+    _edgar_env(tmp_path, monkeypatch)
+    respx.get(url__regex=r"/daily-index/").respond(403, text=BLOCK_PAGE)
+
+    with caplog.at_level(logging.INFO, logger="tape.cli"):
+        assert main(["-v", "backfill", "--days", "7"]) == EXIT_TEMPFAIL
+    (record,) = [r for r in caplog.records if r.name == "tape.cli"]
+    assert record.exc_info and record.exc_info[0] is EdgarBlockedError
+
+
+def test_blocked_run_is_one_line_and_tempfail(tmp_path, monkeypatch, capsys):
+    path = _edgar_env(tmp_path, monkeypatch)
+
+    def blocked_pass(*_a, **_k):
+        raise EdgarBlockedError("blocked", request=httpx.Request("GET", FEED_URL),
+                                response=httpx.Response(403, text=BLOCK_PAGE))
+
+    monkeypatch.setattr("tape.pipeline.run_pass", blocked_pass)
+    assert main(["run"]) == EXIT_TEMPFAIL
+    captured = capsys.readouterr()
+    assert captured.out == "" and "EDGAR is blocking requests" in captured.err
+    assert "Traceback" not in captured.err
+    assert path.exists()
+
+
+def test_other_errors_still_raise(tmp_path, monkeypatch):
+    _edgar_env(tmp_path, monkeypatch)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr("tape.pipeline.backfill", broken)
+    with pytest.raises(RuntimeError, match="bug"):
+        main(["backfill", "--days", "1"])
+
+
+@respx.mock
+def test_run_with_feed_down_is_one_line_and_tempfail(tmp_path, monkeypatch, capsys):
+    path = _edgar_env(tmp_path, monkeypatch)
+    feed = respx.get(FEED_URL).respond(503)
+
+    assert main(["run"]) == EXIT_TEMPFAIL
+
+    assert feed.call_count > 1  # Edgar.get retried before giving up
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("EDGAR request failed (") and captured.err.endswith("; try again later\n")
+    assert "Traceback" not in captured.err
+    (run,) = _runs(path)
+    assert run["kind"] == "pass" and run["error"].startswith("HTTPStatusError:") and not run["blocked"]
+
+
+@respx.mock
+def test_backfill_with_edgar_unreachable_is_tempfail(tmp_path, monkeypatch, capsys):
+    path = _edgar_env(tmp_path, monkeypatch)
+    respx.get(url__regex=r"/daily-index/").mock(side_effect=httpx.ConnectTimeout("timed out"))
+
+    assert main(["backfill", "--days", "7"]) == EXIT_TEMPFAIL
+
+    assert "EDGAR request failed (timed out)" in capsys.readouterr().err
+    (run,) = _runs(path)
+    assert run["error"].startswith("ConnectTimeout:")

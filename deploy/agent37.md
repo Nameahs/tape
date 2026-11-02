@@ -45,6 +45,14 @@ If you would rather send the digest from a script, create a bot with @BotFather,
 Most 5-minute runs find nothing pending and end after two commands, so they cost almost no
 agent credit. Jev scoring costs cents per day.
 
+### Exit status of `tape run` and `tape backfill`
+
+| Status | Meaning |
+| --- | --- |
+| 0 | Pass finished. A summary ending in `blocked` means EDGAR blocked part of it; the rest was scored. |
+| 75 | EDGAR blocked the host or could not be reached. One line on stderr says which; try again later (a block usually lifts in about 10 minutes). The run is still recorded in `tape stats`. |
+| other | A real failure. Rerun with `-v` for the traceback. |
+
 ## 5. Backfill (once)
 
 ```bash
@@ -52,6 +60,9 @@ tape backfill --days 90 -v
 tape evaluate --days 140   # 90 business days is about 130 calendar days
 tape dashboard
 ```
+
+If the backfill exits with status 75, EDGAR blocked or dropped it partway. Wait about 10 minutes
+and run the same command again: filings already stored are not fetched or scored twice.
 
 Then read `out/eval.json` and tune thresholds with the `TAPE_*` variables. Apply new thresholds
 to stored scores with `tape reroute` instead of re-scoring.
