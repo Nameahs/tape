@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -6,6 +6,7 @@ import pytest
 
 from tape import db
 from tape.evaluate import (
+    ET,
     MIN_OUTCOMES,
     NotEnoughOutcomes,
     bootstrap_gap_ci,
@@ -61,6 +62,33 @@ def test_compute_outcomes(conn):
     assert row["event_day"] == "2026-10-07"
     assert row["abnormal_return"] == pytest.approx(-0.10)
     assert compute_outcomes(conn, FakePrices(), today=TODAY) == 0  # idempotent
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        ("2026-10-12T14:00:00-04:00", 0),  # market open: Monday's bar is still moving
+        ("2026-10-12T16:10:00-04:00", 0),  # just after the close, not yet settled
+        ("2026-10-12T17:00:00-04:00", 1),  # settled
+        ("2026-10-12T21:00:00+00:00", 1),  # UTC clock, 5:00 pm ET
+        ("2026-10-13T09:00:00-04:00", 1),  # next morning
+    ],
+)
+def test_compute_outcomes_waits_for_the_event_day_to_settle(conn, now, expected):
+    f = make_filing(1, accepted_at="2026-10-09T17:30:00-04:00")  # Friday evening -> Monday Oct 12
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no))
+    assert compute_outcomes(conn, FakePrices(), now=datetime.fromisoformat(now)) == expected
+    if not expected:
+        # Nothing written, so a later run still prices it.
+        assert compute_outcomes(conn, FakePrices(), now=datetime(2026, 10, 13, 9, tzinfo=ET)) == 1
+
+
+def test_compute_outcomes_before_any_settled_day_writes_nothing(conn):
+    f = make_filing(1, accepted_at="2026-10-04T12:00:00-04:00")
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no))
+    assert compute_outcomes(conn, FakePrices(), now=datetime(2026, 10, 5, 12, tzinfo=ET)) == 0
 
 
 class RecordingPrices(FakePrices):

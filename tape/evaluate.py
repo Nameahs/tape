@@ -20,6 +20,9 @@ import pandas as pd
 
 ET = ZoneInfo("America/New_York")
 CLOSE = time(16, 0)
+# Until this time Yahoo's bar for today can still hold the last trade rather than the official
+# close, so today's row isn't used for outcomes before it.
+SETTLED = time(17, 0)
 MARKET = "SPY"
 # Item codes a rule-writer would flag without any AI.
 RULE_ITEMS = {"1.01", "2.01", "2.02", "5.02"}
@@ -68,10 +71,22 @@ def event_day(accepted_at: str, trading_days: list[date]) -> date | None:
     return trading_days[i] if i < len(trading_days) else None
 
 
+def settled(day: date, now: datetime) -> bool:
+    """Whether `day`'s close is final as of `now`: an earlier day, or today once SETTLED has passed."""
+    now = now.astimezone(ET)
+    return day < now.date() or (day == now.date() and now.time() >= SETTLED)
+
+
 def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
-                     lookback_days: int = PRICE_LOOKBACK_DAYS, today: date | None = None) -> int:
-    """Price scored filings accepted in the last `lookback_days` that have no outcome yet."""
-    cutoff = (today or datetime.now(ET).date()) - timedelta(days=lookback_days)
+                     lookback_days: int = PRICE_LOOKBACK_DAYS, today: date | None = None,
+                     now: datetime | None = None) -> int:
+    """Price scored filings accepted in the last `lookback_days` that have no outcome yet.
+
+    A filing whose event day hasn't settled yet is left for a later run: an outcome is never
+    revisited once written, so an intraday return stored now would stay wrong for good.
+    """
+    now = (now or datetime.now(ET)).astimezone(ET)
+    cutoff = (today or now.date()) - timedelta(days=lookback_days)
     rows = conn.execute(
         """
         SELECT f.accession_no, f.ticker, f.accepted_at FROM filings f
@@ -86,7 +101,9 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
     last = max(datetime.fromisoformat(r["accepted_at"]).date() for r in rows) + timedelta(days=7)
     tickers = sorted({r["ticker"] for r in rows} | {MARKET})
     closes = prices.closes(tickers, first, last).sort_index()
-    trading_days = [d for d in closes.index if pd.notna(closes.at[d, MARKET])]
+    trading_days = [d for d in closes.index if pd.notna(closes.at[d, MARKET]) and settled(d, now)]
+    if not trading_days:
+        return 0
     # No filling: a missing prior close must leave the return NaN rather than fold several days'
     # move into one (pandas 2.x pads by default, pandas 3 doesn't).
     returns = closes.loc[trading_days].pct_change(fill_method=None)
