@@ -215,7 +215,7 @@ def test_run_lifecycle(conn):
     assert dict(row) | {"id": 0} == {
         "id": 0, "kind": "pass", "started_at": "2026-10-15T14:00:00Z", "finished_at": "2026-10-15T14:00:09Z",
         "discovered": 5, "fetched": 4, "fetch_errors": 1, "scored": 4, "routed_now": 1, "routed_digest": 0,
-        "routed_log": 3, "cost_usd": 0.012, "blocked": 0, "error": None,
+        "routed_log": 3, "cost_usd": 0.012, "blocked": 0, "feed_gap": 0, "error": None,
     }
 
 
@@ -223,6 +223,12 @@ def test_blocked_run_is_recorded(conn):
     run_id = db.start_run(conn, "pass")
     db.finish_run(conn, run_id, blocked=True)
     assert conn.execute("SELECT blocked FROM runs WHERE id = ?", (run_id,)).fetchone()[0] == 1
+
+
+def test_feed_gap_run_is_recorded(conn):
+    run_id = db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z")
+    db.finish_run(conn, run_id, feed_gap=True)
+    assert conn.execute("SELECT feed_gap FROM runs WHERE id = ?", (run_id,)).fetchone()[0] == 1
 
 
 def test_blocked_column_is_added_to_existing_runs(tmp_path):

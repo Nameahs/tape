@@ -48,6 +48,8 @@ Everything runs inside one Agent37 workspace. Plain Python does the repeatable w
 | Evaluator | `tape/evaluate.py` | Pulls prices, computes next-day abnormal returns, compares score groups and baselines | Nightly scheduled job, plus a one-time backfill |
 | Dashboard | `tape/dashboard.py` | One page: today's scored filings, mean move by score, cost per day | Static HTML rebuilt nightly |
 
+**Feed gaps.** The feed holds the latest 100 entries, so filings can scroll off between passes. A pass flags a full feed that shares nothing with the store, and a daily `tape backfill` reads EDGAR's daily index to pick up whatever was missed.
+
 **EDGAR rules to respect.** No API key is needed. The SEC caps automated access at 10 requests per second and blocks IPs that exceed it, so the ingester throttles to 5 per second and sends a descriptive User-Agent with a contact email ([SEC developer resources](https://www.sec.gov/about/developer-resources)).
 
 ## Jev question design

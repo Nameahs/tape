@@ -122,3 +122,16 @@ def test_spend_query_seeks_on_the_scored_at_index(conn):
     window = ("2026-10-01T00:00:00+00:00", "2026-10-08T00:00:00+00:00")
     plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + SPEND_SQL, window))
     assert "USING INDEX idx_scores_scored_jd" in plan
+
+
+def test_counts_runs_that_found_a_feed_gap(conn):
+    for started_at, gap in [("2026-10-16T14:00:00Z", True), ("2026-10-16T14:05:00Z", False)]:
+        db.finish_run(conn, db.start_run(conn, "pass", started_at=started_at), feed_gap=gap)
+    s = collect(conn, days=1, today=date(2026, 10, 16))
+    assert (s.runs, s.feed_gap_runs) == (2, 1)
+    assert "Feed may have dropped filings before 1 of 2 runs in window" in format_stats(s)
+
+
+def test_format_stats_omits_feed_gap_line_without_gaps(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z"))
+    assert "Feed may have" not in format_stats(collect(conn, days=1, today=date(2026, 10, 16)))
