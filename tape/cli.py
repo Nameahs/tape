@@ -254,6 +254,8 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # At INFO httpx logs every request URL, and the Telegram token is part of the URL.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         settings = Settings.from_env()
         conn = db.connect(settings.db_path)
