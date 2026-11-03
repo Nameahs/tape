@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from tape import db
 from tape.config import Settings
@@ -21,6 +21,10 @@ log = logging.getLogger(__name__)
 # How far back to look for filings stored without a ticker. Most 8-K filers without one never get
 # one, so the window keeps each pass from rechecking the whole history.
 TICKER_BACKFILL_DAYS = 7
+
+# How long before a daily index's date a filing it lists can have been accepted: an 8-K accepted on
+# Friday evening is in the next business day's index, which is Tuesday after a Monday holiday.
+INDEX_LAG_DAYS = 4
 
 
 @dataclass
@@ -217,6 +221,10 @@ def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
                 # Moving on to the next day would only extend the block, and finishing quietly would
                 # report a backfill that skipped filings as a success.
                 raise blocked
+        # Known filings are skipped above, so this is the only way a rerun repairs a stretch fetched while
+        # the ticker map was down. The pass's own fill only looks back TICKER_BACKFILL_DAYS. A block returns
+        # before this: the map is another EDGAR download.
+        fill_missing_tickers(conn, edgar, now=datetime.combine(end, time.min, ET), days=days + INDEX_LAG_DAYS)
     return stats
 
 
