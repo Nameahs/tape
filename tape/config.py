@@ -9,6 +9,10 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 
 
+class ConfigError(ValueError):
+    """A setting is missing or invalid. The fix is in the environment, not the code."""
+
+
 def _float(name: str, default: float) -> float:
     raw = os.environ.get(name, "").strip()
     return _parse_float(name, raw) if raw else default
@@ -21,9 +25,9 @@ def _int(name: str, default: int, minimum: int) -> int:
     try:
         value = int(raw)
     except ValueError:
-        raise ValueError(f"{name}: expected a whole number, got {raw!r}") from None
+        raise ConfigError(f"{name}: expected a whole number, got {raw!r}") from None
     if value < minimum:
-        raise ValueError(f"{name}: must be at least {minimum}, got {value}")
+        raise ConfigError(f"{name}: must be at least {minimum}, got {value}")
     return value
 
 
@@ -36,9 +40,9 @@ def _parse_float(name: str, raw: str) -> float:
     try:
         value = float(raw)
     except ValueError:
-        raise ValueError(f"{name}: expected a number, got {raw!r}") from None
+        raise ConfigError(f"{name}: expected a number, got {raw!r}") from None
     if not math.isfinite(value):
-        raise ValueError(f"{name}: expected a finite number, got {raw!r}")
+        raise ConfigError(f"{name}: expected a finite number, got {raw!r}")
     return value
 
 
@@ -60,7 +64,7 @@ class Thresholds:
         for event, values in self.overrides.items():
             unknown = set(values) - names
             if unknown:
-                raise ValueError(f"unknown threshold(s) for {event}: {', '.join(sorted(unknown))}")
+                raise ConfigError(f"unknown threshold(s) for {event}: {', '.join(sorted(unknown))}")
 
     def for_event(self, event: str | None) -> Thresholds:
         """The cutoffs that apply to one event label, with its overrides folded in."""
@@ -98,7 +102,7 @@ def _event_overrides(env: Mapping[str, str]) -> dict[str, dict[str, float]]:
         if cutoff not in names:
             continue
         if event not in EVENTS:
-            raise ValueError(f"{key}: unknown event {event!r}; expected one of {', '.join(EVENTS)}")
+            raise ConfigError(f"{key}: unknown event {event!r}; expected one of {', '.join(EVENTS)}")
         out.setdefault(event, {})[cutoff] = _parse_float(key, raw.strip())
     return out
 
@@ -113,7 +117,7 @@ def require_contact(user_agent: str) -> str:
     """
     name, _, domain = user_agent.strip().rpartition("@")
     if not name.strip() or "." not in domain or " " in domain:
-        raise ValueError(
+        raise ConfigError(
             f"TAPE_USER_AGENT must include a contact email for the SEC, e.g. "
             f"'Tape you@example.com'; got {user_agent!r}"
         )
@@ -150,6 +154,6 @@ class Settings:
 
     def __post_init__(self) -> None:
         if self.jev_retry_budget_s <= 0:
-            raise ValueError(f"jev_retry_budget_s must be positive, got {self.jev_retry_budget_s}")
+            raise ConfigError(f"jev_retry_budget_s must be positive, got {self.jev_retry_budget_s}")
         if self.jev_input_price_per_m < 0:
-            raise ValueError(f"jev_input_price_per_m must not be negative, got {self.jev_input_price_per_m}")
+            raise ConfigError(f"jev_input_price_per_m must not be negative, got {self.jev_input_price_per_m}")

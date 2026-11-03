@@ -16,6 +16,8 @@ filings it routed `now`. Do not re-score or second-guess the routing.
    minutes). Say so in one line and carry on; filings already stored were still scored.
    If the summary includes `gap`, some older filings may have been missed; the morning backfill
    picks them up. Say so in one line and carry on.
+   If `tape run` exits with status 2 and prints a line starting `error:`, a setting is missing or
+   wrong. Report that line and stop; retrying won't help until the setting is fixed.
    If `tape run` instead exits with status 75 and prints one line starting `EDGAR`, EDGAR
    could not be reached at all this run. Say so in one line, still run `tape pending` (earlier
    filings may be waiting for a brief), and don't retry `tape run` yourself; the next scheduled

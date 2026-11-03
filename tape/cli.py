@@ -9,7 +9,7 @@ import sys
 from datetime import UTC, datetime, timedelta
 
 from tape import db
-from tape.config import Settings, require_contact
+from tape.config import ConfigError, Settings, require_contact
 
 log = logging.getLogger(__name__)
 
@@ -254,15 +254,21 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    settings = Settings.from_env()
-    conn = db.connect(settings.db_path)
     try:
-        busy_exit = getattr(args, "busy_exit", None)
-        if busy_exit is None:
-            return args.fn(args, settings, conn)
-        return _run_locked(args, settings, conn, busy_exit)
-    finally:
-        conn.close()
+        settings = Settings.from_env()
+        conn = db.connect(settings.db_path)
+        try:
+            busy_exit = getattr(args, "busy_exit", None)
+            if busy_exit is None:
+                return args.fn(args, settings, conn)
+            return _run_locked(args, settings, conn, busy_exit)
+        finally:
+            conn.close()
+    except ConfigError as e:
+        # A typo in a workspace secret isn't a bug in the code, so it doesn't get a traceback unless asked.
+        logging.getLogger(__name__).info("configuration error", exc_info=True)
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
 
 def _run_locked(args, settings, conn, busy_exit: int) -> int:
