@@ -43,6 +43,10 @@ If you would rather send the digest from a script, create a bot with @BotFather,
 | 6:00 pm, Mon to Fri | "Use the tape-brief skill, including the evening digest." |
 | 9:00 pm, Mon to Fri | Run `tape evaluate && tape dashboard` (no briefs) |
 
+If Yahoo is down, `tape evaluate` prints `prices unavailable; no outcomes added`, reports on the
+outcomes it already has and exits 0, so the dashboard still refreshes and the next night catches up.
+Exit status 2 means a setup problem, such as the `prices` extra not being installed.
+
 Most 5-minute runs find nothing pending and end after two commands, so they cost almost no
 agent credit. Jev scoring costs cents per day.
 

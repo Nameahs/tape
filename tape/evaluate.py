@@ -19,6 +19,8 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 
+from tape.config import ConfigError
+
 log = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
@@ -56,7 +58,10 @@ class PriceSource(Protocol):
 
 class YFinancePrices:
     def closes(self, tickers: list[str], start: date, end: date) -> pd.DataFrame:
-        import yfinance as yf  # optional dependency: pip install tape[prices]
+        try:
+            import yfinance as yf
+        except ImportError as e:
+            raise ConfigError('yfinance is not installed; run pip install -e ".[prices]" or pass --skip-prices') from e
 
         # EDGAR uses '-' for share classes (BRK-B); Yahoo does too.
         data = yf.download(tickers, start=start, end=end + timedelta(days=1), auto_adjust=True,
@@ -112,6 +117,8 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
     tickers = sorted({r["ticker"] for r in rows} | {MARKET})
     try:
         closes = prices.closes(tickers, first, last).sort_index()
+    except ConfigError:
+        raise  # a setup mistake won't clear by itself, so it shouldn't pass for an outage
     except Exception as e:  # yfinance raises whatever its HTTP and parsing layers do
         raise PricesUnavailable(f"{type(e).__name__}: {e}") from e
     if closes.empty or MARKET not in closes.columns:

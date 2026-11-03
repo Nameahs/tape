@@ -1,5 +1,6 @@
 import json
 import logging
+import sys
 from datetime import date
 
 import httpx
@@ -346,6 +347,19 @@ def test_evaluate_reports_from_stored_outcomes_when_prices_fail(source, tmp_path
     assert "prices unavailable; no outcomes added" in capsys.readouterr().out
     assert "price download failed" in caplog.text
     assert json.loads(out.read_text())["n"] == 25
+
+
+def test_evaluate_without_yfinance_is_a_configuration_error(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    monkeypatch.setitem(sys.modules, "yfinance", None)  # makes the import raise ImportError
+
+    assert main(["evaluate", "--out", str(tmp_path / "eval.json")]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: yfinance is not installed")
+    assert "prices unavailable" not in captured.out
 
 
 class _Stop(Exception):
