@@ -219,14 +219,17 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tape", description="SEC 8-K watcher scored by Jev")
     p.add_argument("-v", "--verbose", action="store_true")
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("init", help="create the SQLite store").set_defaults(fn=cmd_init)
+    # creates_store: only these commands may create a missing database. To the others an empty store
+    # would look just like a quiet day, so a wrong TAPE_DB_PATH has to be an error (see main).
+    sub.add_parser("init", help="create the SQLite store").set_defaults(fn=cmd_init, creates_store=True)
     # busy_exit: these commands take the pipeline lock, and this is their status if it's held.
     # A scheduled run that finds a backfill going is a quiet pass (0); a backfill someone started
     # by hand that didn't run should say so (1).
-    sub.add_parser("run", help="one pass: ingest, score, route").set_defaults(fn=cmd_run, busy_exit=0)
+    r = sub.add_parser("run", help="one pass: ingest, score, route")
+    r.set_defaults(fn=cmd_run, busy_exit=0, creates_store=True)
     b = sub.add_parser("backfill", help="ingest and score past business days")
     b.add_argument("--days", type=_positive_int, default=90)
-    b.set_defaults(fn=cmd_backfill, busy_exit=1)
+    b.set_defaults(fn=cmd_backfill, busy_exit=1, creates_store=True)
     sub.add_parser("reroute", help="re-apply thresholds to stored scores").set_defaults(fn=cmd_reroute)
     pe = sub.add_parser("pending", help="recent filings waiting for a brief (JSON)")
     pe.add_argument("--max-age-hours", type=_positive_int, default=24,
@@ -266,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         settings = Settings.from_env()
-        conn = db.connect(settings.db_path)
+        conn = db.connect(settings.db_path, create=getattr(args, "creates_store", False))
         try:
             busy_exit = getattr(args, "busy_exit", None)
             if busy_exit is None:
@@ -278,6 +281,9 @@ def main(argv: list[str] | None = None) -> int:
         # A typo in a workspace secret isn't a bug in the code, so it doesn't get a traceback unless asked.
         logging.getLogger(__name__).info("configuration error", exc_info=True)
         print(f"error: {e}", file=sys.stderr)
+        return 2
+    except db.StoreNotFound as e:
+        print(f"error: no Tape store at {e}; check TAPE_DB_PATH, or run tape init to create one", file=sys.stderr)
         return 2
 
 

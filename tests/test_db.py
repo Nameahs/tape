@@ -6,6 +6,26 @@ from tape import db
 from tests.conftest import make_filing, make_score
 
 
+def test_connect_without_create_refuses_a_missing_store(tmp_path):
+    path = tmp_path / "missing" / "t.db"
+    with pytest.raises(db.StoreNotFound, match="t.db"):
+        db.connect(path, create=False)
+    assert not path.parent.exists()
+
+
+def test_connect_without_create_refuses_a_directory(tmp_path):
+    with pytest.raises(db.StoreNotFound):
+        db.connect(tmp_path, create=False)
+
+
+def test_connect_without_create_opens_an_existing_store(tmp_path):
+    path = tmp_path / "t.db"
+    db.connect(path).close()
+    conn = db.connect(path, create=False)
+    assert not db.has_filings(conn)
+    conn.close()
+
+
 def test_upsert_is_idempotent(conn):
     f = make_filing()
     db.upsert_filing(conn, f)

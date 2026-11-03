@@ -66,6 +66,10 @@ A pass that thinks it missed something ends its summary with `gap`, and `tape st
 | 75 | EDGAR blocked the host or could not be reached. One line on stderr says which; try again later (a block usually lifts in about 10 minutes). The run is still recorded in `tape stats`. |
 | other | A real failure. Rerun with `-v` for the traceback. |
 
+`tape run` and `tape backfill` create the store if it's missing. Every other command exits with status
+2 and `error: no Tape store at ...` instead, so a wrong `TAPE_DB_PATH` or working directory can't pass
+for a quiet day. If you see that line, fix the variable; `tape init` is only for a genuinely new store.
+
 ## 5. Backfill (once)
 
 ```bash
