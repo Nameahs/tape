@@ -163,3 +163,24 @@ def test_send_telegram_leaves_a_passed_client_open():
     send_telegram("hi", token="T", chat_id="42", client=client)
     assert not client.is_closed
     client.close()
+
+
+@respx.mock
+def test_send_telegram_keeps_the_token_out_of_status_errors():
+    token = "123456:SECRET"
+    respx.post(API.format(token=token)).respond(401, json={"ok": False})
+    with pytest.raises(httpx.HTTPStatusError) as e:
+        send_telegram("hello", token=token, chat_id="42", client=httpx.Client())
+    assert token not in str(e.value)
+    assert "401" in str(e.value)
+    assert "bot***/sendMessage" in str(e.value)
+
+
+@respx.mock
+def test_send_telegram_keeps_the_token_out_of_transport_errors(monkeypatch):
+    monkeypatch.setattr(notify.time, "sleep", lambda s: None)
+    token = "123456:SECRET"
+    respx.post(API.format(token=token)).mock(side_effect=httpx.ConnectError(f"failed for {API.format(token=token)}"))
+    with pytest.raises(httpx.ConnectError) as e:
+        send_telegram("hello", token=token, chat_id="42", client=httpx.Client())
+    assert token not in str(e.value)

@@ -58,9 +58,15 @@ def send_telegram(text: str, token: str | None = None, chat_id: str | None = Non
     try:
         sent = 0
         for part in chunks(text):
-            _post(http, API.format(token=token), {
-                "chat_id": chat_id, "text": part, "disable_web_page_preview": True,
-            })
+            try:
+                _post(http, API.format(token=token), {
+                    "chat_id": chat_id, "text": part, "disable_web_page_preview": True,
+                })
+            except httpx.HTTPError as e:
+                # httpx puts the request URL in the message, and the token is part of that URL. Callers log
+                # this, and the job log is kept on the workspace.
+                e.args = tuple(a.replace(token, "***") if isinstance(a, str) else a for a in e.args)
+                raise
             sent += 1
         return sent
     finally:

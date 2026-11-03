@@ -9,6 +9,7 @@ from tape import db
 from tape.cli import EXIT_TEMPFAIL, format_digest, main
 from tape.edgar import FEED_URL, EdgarBlockedError
 from tape.evaluate import PRICE_LOOKBACK_DAYS
+from tape.notify import API
 from tests.conftest import make_filing, make_score
 
 
@@ -193,6 +194,22 @@ def test_digest_send_failure_still_prints(tmp_path, monkeypatch, capsys, caplog)
     assert "4.4  EXMP  mna" in capsys.readouterr().out
     assert "digest not sent" in caplog.text
     assert "connection refused" in caplog.text
+
+
+@respx.mock
+@pytest.mark.parametrize("status, code", [(200, 0), (401, 1)])
+def test_digest_send_keeps_the_token_out_of_verbose_logs(tmp_path, monkeypatch, caplog, status, code):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    token = "123456:SECRET"
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    respx.post(API.format(token=token)).respond(status, json={"ok": status == 200})
+    caplog.set_level(logging.INFO)
+
+    assert main(["-v", "digest", "--send"]) == code
+    assert token not in caplog.text
 
 
 def test_digest_send_without_credentials(tmp_path, monkeypatch, capsys, caplog):
