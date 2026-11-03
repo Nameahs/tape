@@ -167,6 +167,7 @@ def cmd_evaluate(args, settings, conn) -> int:
     from tape.evaluate import (
         PRICE_LOOKBACK_DAYS,
         NotEnoughOutcomes,
+        PricesUnavailable,
         YFinancePrices,
         compute_outcomes,
         evaluate,
@@ -175,8 +176,15 @@ def cmd_evaluate(args, settings, conn) -> int:
     )
 
     if not args.skip_prices:
-        added = compute_outcomes(conn, YFinancePrices(), lookback_days=args.days or PRICE_LOOKBACK_DAYS)
-        print(f"outcomes added: {added}")
+        try:
+            added = compute_outcomes(conn, YFinancePrices(), lookback_days=args.days or PRICE_LOOKBACK_DAYS)
+        except PricesUnavailable as e:
+            # Unpriced filings stay eligible for later runs, so carry on with what's stored: a Yahoo
+            # outage shouldn't also stop the report and the `&& tape dashboard` that follows.
+            log.warning("price download failed: %s", e)
+            print("prices unavailable; no outcomes added")
+        else:
+            print(f"outcomes added: {added}")
     try:
         report = evaluate(load_frame(conn))
     except NotEnoughOutcomes as e:

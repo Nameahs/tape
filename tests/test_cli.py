@@ -1,7 +1,9 @@
 import json
 import logging
+from datetime import date
 
 import httpx
+import pandas as pd
 import pytest
 import respx
 
@@ -300,6 +302,50 @@ def test_evaluate_with_too_few_outcomes_keeps_earlier_report(tmp_path, monkeypat
 
     assert main(["evaluate", "--skip-prices", "--out", str(out)]) == 0
     assert out.read_text() == '{"n": 25}'
+
+
+def _seed_outcomes(path, n=25):
+    conn = db.connect(path)
+    for i in range(n):
+        f = make_filing(100 + i)
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 1.0 + i % 5))
+        ar = 0.01 * (1 + i % 5)
+        conn.execute("INSERT INTO outcomes VALUES (?, '2026-10-06', ?, 0.0, ?, ?)", (f.accession_no, ar, ar, ar))
+    conn.commit()
+    conn.close()
+
+
+class _RaisingPrices:
+    def closes(self, tickers, start, end):
+        raise httpx.ConnectError("yahoo is down")
+
+
+class _EmptyPrices:
+    def closes(self, tickers, start, end):
+        return pd.DataFrame()
+
+
+class _NoMarketPrices:
+    def closes(self, tickers, start, end):
+        return pd.DataFrame({"EXMP": [50.0, 45.0]}, index=[date(2026, 10, 5), date(2026, 10, 6)])
+
+
+@pytest.mark.parametrize("source", [_RaisingPrices, _EmptyPrices, _NoMarketPrices])
+def test_evaluate_reports_from_stored_outcomes_when_prices_fail(source, tmp_path, monkeypatch, capsys, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)  # scored and unpriced, so the run has to ask for prices
+    _seed_outcomes(path)
+    monkeypatch.setattr("tape.evaluate.YFinancePrices", source)
+    out = tmp_path / "eval.json"
+
+    with caplog.at_level(logging.WARNING, logger="tape.cli"):
+        assert main(["evaluate", "--out", str(out)]) == 0
+
+    assert "prices unavailable; no outcomes added" in capsys.readouterr().out
+    assert "price download failed" in caplog.text
+    assert json.loads(out.read_text())["n"] == 25
 
 
 class _Stop(Exception):

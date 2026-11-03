@@ -8,6 +8,7 @@ Abnormal return: stock close-to-close return minus SPY's over the same day.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass
@@ -17,6 +18,8 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 CLOSE = time(16, 0)
@@ -39,6 +42,10 @@ class NotEnoughOutcomes(ValueError):
     def __init__(self, have: int, need: int = MIN_OUTCOMES) -> None:
         super().__init__(f"need at least {need} filings with outcomes, have {have}")
         self.have, self.need = have, need
+
+
+class PricesUnavailable(RuntimeError):
+    """The price source failed or returned nothing usable. Filings stay eligible for later runs."""
 
 
 class PriceSource(Protocol):
@@ -84,6 +91,9 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
 
     A filing whose event day hasn't settled yet is left for a later run: an outcome is never
     revisited once written, so an intraday return stored now would stay wrong for good.
+
+    Raises PricesUnavailable if the source fails or has no market prices for the window. The
+    window always spans trading days, so that means an outage rather than a quiet stretch.
     """
     now = (now or datetime.now(ET)).astimezone(ET)
     cutoff = (today or now.date()) - timedelta(days=lookback_days)
@@ -100,7 +110,12 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
     first = min(datetime.fromisoformat(r["accepted_at"]).date() for r in rows) - timedelta(days=7)
     last = max(datetime.fromisoformat(r["accepted_at"]).date() for r in rows) + timedelta(days=7)
     tickers = sorted({r["ticker"] for r in rows} | {MARKET})
-    closes = prices.closes(tickers, first, last).sort_index()
+    try:
+        closes = prices.closes(tickers, first, last).sort_index()
+    except Exception as e:  # yfinance raises whatever its HTTP and parsing layers do
+        raise PricesUnavailable(f"{type(e).__name__}: {e}") from e
+    if closes.empty or MARKET not in closes.columns:
+        raise PricesUnavailable(f"no {MARKET} prices between {first} and {last}")
     trading_days = [d for d in closes.index if pd.notna(closes.at[d, MARKET]) and settled(d, now)]
     if not trading_days:
         return 0

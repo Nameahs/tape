@@ -9,6 +9,7 @@ from tape.evaluate import (
     ET,
     MIN_OUTCOMES,
     NotEnoughOutcomes,
+    PricesUnavailable,
     bootstrap_gap_ci,
     compute_outcomes,
     evaluate,
@@ -130,6 +131,32 @@ def test_compute_outcomes_longer_lookback_reaches_old_filings(conn):
     later = date(2026, 12, 31)
     assert compute_outcomes(conn, FakePrices(), today=later) == 0
     assert compute_outcomes(conn, FakePrices(), lookback_days=120, today=later) == 1
+
+
+class BrokenPrices:
+    def closes(self, tickers, start, end):
+        raise KeyError("Close")
+
+
+class NoMarketPrices(FakePrices):
+    def closes(self, tickers, start, end):
+        return super().closes(tickers, start, end).drop(columns="SPY")
+
+
+class EmptyPrices:
+    def closes(self, tickers, start, end):
+        return pd.DataFrame()
+
+
+@pytest.mark.parametrize("source", [BrokenPrices(), NoMarketPrices(), EmptyPrices()])
+def test_compute_outcomes_reports_an_unusable_price_source(conn, source):
+    f = make_filing(1, ticker="EXMP", accepted_at="2026-10-07T08:00:00-04:00")
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no, 3.0))
+    with pytest.raises(PricesUnavailable):
+        compute_outcomes(conn, source, today=TODAY)
+    # Left unpriced, so the next run picks it up.
+    assert compute_outcomes(conn, FakePrices(), today=TODAY) == 1
 
 
 class GappyPrices:
