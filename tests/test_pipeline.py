@@ -7,8 +7,8 @@ import respx
 
 from tape import db, pipeline
 from tape.config import Settings, Thresholds
-from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError, FilingRef
-from tape.pipeline import PassStats, backfill, rescore_routes, run_pass, score_and_route, today_et
+from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError, FeedPage, FilingRef
+from tape.pipeline import PassStats, backfill, feed_gap, rescore_routes, run_pass, score_and_route, today_et
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
 from tests.test_edgar import FIX, INDEX, _index_without_documents, _mock_filing
@@ -54,6 +54,52 @@ def test_backfill_defaults_to_eastern_today(conn, monkeypatch):
     monkeypatch.setattr(pipeline, "today_et", lambda: date(2026, 10, 21))
     stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1)
     assert tuesday.called and stats.scored == 1
+
+
+@respx.mock
+def test_backfill_fills_in_tickers_when_the_map_comes_back(conn, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    monkeypatch.setattr("tape.edgar.TICKERS_RETRY_AFTER", 0.0)
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261013.idx"
+    respx.get(idx).respond(200, text=(FIX / "form.idx").read_text())
+    _mock_filing(respx)
+    ok = httpx.Response(200, text=(FIX / "company_tickers.json").read_text())
+    respx.get(TICKERS_URL).side_effect = [httpx.Response(503)] * 4 + [ok]
+
+    # Fixed dates, so the filing is well outside the week a pass looks back whenever this runs.
+    backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
+
+    assert conn.execute("SELECT ticker FROM filings").fetchone()[0] == "EXMP"
+
+
+@respx.mock
+def test_rerunning_a_backfill_repairs_tickers_in_its_span(conn):
+    # Tuesday's index lists Friday evening's filing when Monday is a holiday, so the window reaches it.
+    db.upsert_filing(conn, make_filing(1, cik="0000000001", ticker=None, accepted_at="2026-10-09T18:00:00-04:00"))
+    db.upsert_filing(conn, make_filing(2, cik="0000000001", ticker=None, accepted_at="2026-10-08T18:00:00-04:00"))
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261013.idx"
+    respx.get(idx).respond(200, text=(FIX / "form.idx").read_text().replace("26-000101", "26-000001"))
+    respx.get(TICKERS_URL).respond(200, text=(FIX / "company_tickers.json").read_text())
+
+    backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
+
+    tickers = dict(conn.execute("SELECT accession_no, ticker FROM filings").fetchall())
+    assert tickers["0000000001-26-000001"] == "EXMP"
+    assert tickers["0000000001-26-000002"] is None  # before the backfill's span
+
+
+@respx.mock
+def test_blocked_backfill_skips_the_ticker_fill(conn):
+    db.upsert_filing(conn, make_filing(1, cik="0000000001", ticker=None, accepted_at="2026-10-13T09:00:00-04:00"))
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261013.idx"
+    respx.get(idx).respond(200, text=(FIX / "form.idx").read_text())
+    respx.get(INDEX).respond(403, text=BLOCK_PAGE)
+    tickers = respx.get(TICKERS_URL).respond(200, json={})
+
+    with pytest.raises(EdgarBlockedError):
+        backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
+
+    assert not tickers.called
 
 
 @respx.mock
@@ -360,3 +406,49 @@ def test_fill_missing_tickers_skips_old_filings(conn):
     assert pipeline.fill_missing_tickers(conn, Tickers(), now=datetime(2026, 10, 21, tzinfo=UTC)) == 1
     tickers = dict(conn.execute("SELECT accession_no, ticker FROM filings").fetchall())
     assert tickers == {"0000000001-26-000001": "EXMP", "0000000001-26-000002": None}
+
+
+def _ref(n: int) -> FilingRef:
+    return FilingRef(make_filing(n).accession_no, "0000000001", "Example Corp", "8-K", "https://example.test/i")
+
+
+@pytest.mark.parametrize(
+    ("stored", "refs", "full", "gap"),
+    [
+        pytest.param([1], [2, 3], True, True, id="full page, nothing stored from it"),
+        pytest.param([1], [1, 2], True, False, id="full page reaching a stored filing"),
+        pytest.param([1], [2, 3], False, False, id="short page holds everything there is"),
+        pytest.param([], [2, 3], True, False, id="first pass on an empty store"),
+        pytest.param([1], [], True, False, id="full page of amendments only"),
+    ],
+)
+def test_feed_gap(conn, stored, refs, full, gap):
+    for n in stored:
+        db.upsert_filing(conn, make_filing(n))
+    assert feed_gap(conn, FeedPage([_ref(n) for n in refs], full)) is gap
+
+
+def test_summary_keeps_blocked_last_after_a_gap():
+    assert PassStats(feed_gap=True).summary().endswith("cost=$0.0000 gap")
+    assert PassStats(feed_gap=True, blocked=True).summary().endswith(" gap blocked")
+    assert " gap" not in PassStats().summary()
+
+
+def test_run_pass_warns_about_a_feed_gap_and_still_ingests(conn, caplog):
+    db.upsert_filing(conn, make_filing(1))
+    conn.commit()
+
+    class FullFeed(Edgar):
+        def latest_8k(self):
+            return FeedPage([_ref(2)], True)
+
+        def fetch(self, ref, max_chars):
+            return make_filing(2)
+
+        def ticker_for(self, cik):
+            return None
+
+    stats = run_pass(conn, FullFeed("ua"), FakeJev(), Settings())
+    assert stats.feed_gap and stats.fetched == 1
+    assert "may have been missed" in caplog.text
+    assert conn.execute("SELECT feed_gap FROM runs").fetchone()[0] == 1

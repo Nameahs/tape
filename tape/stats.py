@@ -20,7 +20,7 @@ WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) < julianday(
 """
 
 RUNS_SQL = """
-SELECT COUNT(*) AS n, COALESCE(SUM(blocked), 0) AS blocked FROM runs
+SELECT COUNT(*) AS n, COALESCE(SUM(blocked), 0) AS blocked, COALESCE(SUM(feed_gap), 0) AS feed_gaps FROM runs
 WHERE julianday(started_at) >= julianday(?) AND julianday(started_at) < julianday(?)
 """
 
@@ -47,6 +47,8 @@ class Stats:
     # Pipeline runs started in the window, and how many of them EDGAR's rate limit cut short.
     runs: int = 0
     blocked_runs: int = 0
+    # Of those, how many found the feed had moved on past filings they never saw.
+    feed_gap_runs: int = 0
 
 
 def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) -> Stats:
@@ -87,7 +89,7 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) 
     runs = conn.execute(RUNS_SQL, window).fetchone()
     return Stats(days=[buckets[k] for k in sorted(buckets)], spend_usd=float(spend["cost"]), calls=int(spend["n"]),
                  given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)),
-                 runs=int(runs["n"]), blocked_runs=int(runs["blocked"]))
+                 runs=int(runs["n"]), blocked_runs=int(runs["blocked"]), feed_gap_runs=int(runs["feed_gaps"]))
 
 
 def format_stats(s: Stats) -> str:
@@ -104,6 +106,11 @@ def format_stats(s: Stats) -> str:
     lines.append(f"Jev spend in window: ${s.spend_usd:.2f} over {s.calls:,} calls")
     if s.blocked_runs:
         lines.append(f"EDGAR rate-limited {s.blocked_runs:,} of {s.runs:,} runs in window")
+    if s.feed_gap_runs:
+        lines.append(
+            f"Feed may have dropped filings before {s.feed_gap_runs:,} of {s.runs:,} runs in window "
+            "(tape backfill --days N picks them up)"
+        )
     if s.given_up:
         lines.append(
             f"Gave up scoring {s.given_up:,} filing(s) after {db.MAX_SCORE_ATTEMPTS} failed attempts "

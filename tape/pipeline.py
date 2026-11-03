@@ -8,11 +8,11 @@ from collections import Counter
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 from tape import db
 from tape.config import Settings
-from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FilingRef
+from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FeedPage, FilingRef
 from tape.route import route
 from tape.score import SystemOneClient, score_many
 
@@ -21,6 +21,10 @@ log = logging.getLogger(__name__)
 # How far back to look for filings stored without a ticker. Most 8-K filers without one never get
 # one, so the window keeps each pass from rechecking the whole history.
 TICKER_BACKFILL_DAYS = 7
+
+# How long before a daily index's date a filing it lists can have been accepted: an 8-K accepted on
+# Friday evening is in the next business day's index, which is Tuesday after a Monday holiday.
+INDEX_LAG_DAYS = 4
 
 
 @dataclass
@@ -33,6 +37,8 @@ class PassStats:
     cost_usd: float = 0.0
     # EDGAR blocked us mid-pass, so some discovered filings were left for a later pass.
     blocked: bool = False
+    # The feed may have moved on past filings we never saw; see feed_gap().
+    feed_gap: bool = False
 
     def summary(self) -> str:
         r = self.routes
@@ -40,6 +46,8 @@ class PassStats:
             f"discovered={self.discovered} fetched={self.fetched} errors={self.fetch_errors} "
             f"scored={self.scored} now={r['now']} digest={r['digest']} log={r['log']} cost=${self.cost_usd:.4f}"
         )
+        if self.feed_gap:
+            text += " gap"
         return text + " blocked" if self.blocked else text
 
 
@@ -61,7 +69,8 @@ def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
         try:
             db.finish_run(conn, run_id, discovered=stats.discovered, fetched=stats.fetched,
                           fetch_errors=stats.fetch_errors, scored=stats.scored, routes=stats.routes,
-                          cost_usd=stats.cost_usd, blocked=stats.blocked, error=error)
+                          cost_usd=stats.cost_usd, blocked=stats.blocked, feed_gap=stats.feed_gap,
+                          error=error)
         except Exception:
             # Bookkeeping must never mask the pass's own result or exception.
             log.exception("could not record run %s", run_id)
@@ -111,6 +120,20 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
     return None
 
 
+def feed_gap(conn: sqlite3.Connection, page: FeedPage) -> bool:
+    """Whether filings may have scrolled off the feed since the last pass.
+
+    The feed is newest first, so one entry we already hold means everything newer is on the page. A
+    full page with none of them means the older entries were cut off somewhere after the last filing
+    we saw. An empty store is just a first pass.
+    """
+    if not page.full or not page.refs:
+        return False
+    if db.known_accessions(conn, [r.accession_no for r in page.refs]):
+        return False
+    return db.has_filings(conn)
+
+
 def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Settings, stats: PassStats) -> None:
     rows = db.unscored(conn)
     if not rows:
@@ -157,14 +180,18 @@ def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime |
 def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings) -> PassStats:
     with recorded(conn, "pass") as stats:
         try:
-            refs = edgar.latest_8k()
+            page = edgar.latest_8k()
         except EdgarBlockedError:
             # Scoring doesn't touch EDGAR, so filings stored on an earlier pass (say, after a Jev
             # timeout) still get scored and routed instead of waiting out the block.
             stats.blocked = True
             log.warning("EDGAR is blocking requests; skipping the feed this pass", exc_info=True)
         else:
-            ingest(conn, edgar, refs, settings, stats)
+            if feed_gap(conn, page):
+                stats.feed_gap = True
+                log.warning("none of the %d filings on a full feed are stored; older filings may have been "
+                            "missed until the next tape backfill", len(page.refs))
+            ingest(conn, edgar, page.refs, settings, stats)
         if not stats.blocked:
             # The ticker map is another EDGAR download; asking for it now would only prolong the block.
             fill_missing_tickers(conn, edgar)
@@ -194,6 +221,10 @@ def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
                 # Moving on to the next day would only extend the block, and finishing quietly would
                 # report a backfill that skipped filings as a success.
                 raise blocked
+        # Known filings are skipped above, so this is the only way a rerun repairs a stretch fetched while
+        # the ticker map was down. The pass's own fill only looks back TICKER_BACKFILL_DAYS. A block returns
+        # before this: the map is another EDGAR download.
+        fill_missing_tickers(conn, edgar, now=datetime.combine(end, time.min, ET), days=days + INDEX_LAG_DAYS)
     return stats
 
 

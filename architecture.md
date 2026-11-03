@@ -48,6 +48,8 @@ Everything runs inside one Agent37 workspace. Plain Python does the repeatable w
 | Evaluator | `tape/evaluate.py` | Pulls prices, computes next-day abnormal returns, compares score groups and baselines | Nightly scheduled job, plus a one-time backfill |
 | Dashboard | `tape/dashboard.py` | One page: today's scored filings, mean move by score, cost per day | Static HTML rebuilt nightly |
 
+**Feed gaps.** The feed holds the latest 100 entries, so filings can scroll off between passes. A pass flags a full feed that shares nothing with the store, and a daily `tape backfill` reads EDGAR's daily index to pick up whatever was missed.
+
 **EDGAR rules to respect.** No API key is needed. The SEC caps automated access at 10 requests per second and blocks IPs that exceed it, so the ingester throttles to 5 per second and sends a descriptive User-Agent with a contact email ([SEC developer resources](https://www.sec.gov/about/developer-resources)).
 
 ## Jev question design
@@ -86,7 +88,7 @@ Four SQLite tables, all keyed on the EDGAR accession number so every stage can b
 | `briefs` | accession_no, route (now / digest / log), brief_text, sent_at | Only routed filings get a brief |
 | `outcomes` | accession_no, event_day, stock_return, market_return, abnormal_return, abs_abnormal_return | Filled by the evaluator once the next day's prices exist |
 
-Filings without a listed ticker (private debt issuers, funds) are stored but skipped in the evaluation. If the ticker map can't be downloaded when a filing is fetched, the filing is stored without one and each pass fills it in from the map for up to a week afterwards.
+Filings without a listed ticker (private debt issuers, funds) are stored but skipped in the evaluation. If the ticker map can't be downloaded when a filing is fetched, the filing is stored without one and each pass fills it in from the map for up to a week afterwards. `tape backfill` does the same for the days it covers, so rerunning one repairs older filings.
 
 ## Evaluation
 
