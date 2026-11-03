@@ -8,6 +8,7 @@ Abnormal return: stock close-to-close return minus SPY's over the same day.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass
@@ -17,6 +18,10 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+
+from tape.config import ConfigError
+
+log = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")
 CLOSE = time(16, 0)
@@ -41,6 +46,10 @@ class NotEnoughOutcomes(ValueError):
         self.have, self.need = have, need
 
 
+class PricesUnavailable(RuntimeError):
+    """The price source failed or returned nothing usable. Filings stay eligible for later runs."""
+
+
 class PriceSource(Protocol):
     def closes(self, tickers: list[str], start: date, end: date) -> pd.DataFrame:
         """Adjusted closes, indexed by date, one column per ticker. Missing data is NaN."""
@@ -49,7 +58,10 @@ class PriceSource(Protocol):
 
 class YFinancePrices:
     def closes(self, tickers: list[str], start: date, end: date) -> pd.DataFrame:
-        import yfinance as yf  # optional dependency: pip install tape[prices]
+        try:
+            import yfinance as yf
+        except ImportError as e:
+            raise ConfigError('yfinance is not installed; run pip install -e ".[prices]" or pass --skip-prices') from e
 
         # EDGAR uses '-' for share classes (BRK-B); Yahoo does too.
         data = yf.download(tickers, start=start, end=end + timedelta(days=1), auto_adjust=True,
@@ -84,6 +96,9 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
 
     A filing whose event day hasn't settled yet is left for a later run: an outcome is never
     revisited once written, so an intraday return stored now would stay wrong for good.
+
+    Raises PricesUnavailable if the source fails or has no market prices for the window. The
+    window always spans trading days, so that means an outage rather than a quiet stretch.
     """
     now = (now or datetime.now(ET)).astimezone(ET)
     cutoff = (today or now.date()) - timedelta(days=lookback_days)
@@ -100,7 +115,14 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
     first = min(datetime.fromisoformat(r["accepted_at"]).date() for r in rows) - timedelta(days=7)
     last = max(datetime.fromisoformat(r["accepted_at"]).date() for r in rows) + timedelta(days=7)
     tickers = sorted({r["ticker"] for r in rows} | {MARKET})
-    closes = prices.closes(tickers, first, last).sort_index()
+    try:
+        closes = prices.closes(tickers, first, last).sort_index()
+    except ConfigError:
+        raise  # a setup mistake won't clear by itself, so it shouldn't pass for an outage
+    except Exception as e:  # yfinance raises whatever its HTTP and parsing layers do
+        raise PricesUnavailable(f"{type(e).__name__}: {e}") from e
+    if closes.empty or MARKET not in closes.columns:
+        raise PricesUnavailable(f"no {MARKET} prices between {first} and {last}")
     trading_days = [d for d in closes.index if pd.notna(closes.at[d, MARKET]) and settled(d, now)]
     if not trading_days:
         return 0
