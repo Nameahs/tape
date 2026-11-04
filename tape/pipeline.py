@@ -39,6 +39,8 @@ class PassStats:
     blocked: bool = False
     # The feed may have moved on past filings we never saw; see feed_gap().
     feed_gap: bool = False
+    # Weekdays a backfill found no daily index for: a market holiday, or filings it could not read.
+    missing_days: int = 0
 
     def summary(self) -> str:
         r = self.routes
@@ -46,6 +48,8 @@ class PassStats:
             f"discovered={self.discovered} fetched={self.fetched} errors={self.fetch_errors} "
             f"scored={self.scored} now={r['now']} digest={r['digest']} log={r['log']} cost=${self.cost_usd:.4f}"
         )
+        if self.missing_days:
+            text += f" missing_days={self.missing_days}"
         if self.feed_gap:
             text += " gap"
         return text + " blocked" if self.blocked else text
@@ -70,7 +74,7 @@ def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
             db.finish_run(conn, run_id, discovered=stats.discovered, fetched=stats.fetched,
                           fetch_errors=stats.fetch_errors, scored=stats.scored, routes=stats.routes,
                           cost_usd=stats.cost_usd, blocked=stats.blocked, feed_gap=stats.feed_gap,
-                          error=error)
+                          missing_days=stats.missing_days, error=error)
         except Exception:
             # Bookkeeping must never mask the pass's own result or exception.
             log.exception("could not record run %s", run_id)
@@ -213,7 +217,13 @@ def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
             day = end - timedelta(days=offset)
             if day.weekday() >= 5:
                 continue
-            blocked = ingest(conn, edgar, edgar.daily_8k(day), settings, stats)
+            refs = edgar.daily_8k(day)
+            if refs is None:
+                # Weekends never get here, so this is a holiday or an index that is late or refused. A
+                # holiday's warning is cheap; a real hole in the backfill would otherwise pass unnoticed.
+                stats.missing_days += 1
+                log.warning("no daily index for %s; its filings were not read unless it was a market holiday", day)
+            blocked = ingest(conn, edgar, refs or [], settings, stats)
             # Score as we go so a long backfill can be interrupted without losing work.
             score_and_route(conn, jev, settings, stats)
             log.info("%s %s", day, stats.summary())

@@ -40,6 +40,39 @@ def test_backfill_skips_weekends(conn):
     assert weekday.called and stats.scored == 1
 
 
+IDX = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.{}.idx"
+
+
+@respx.mock
+@pytest.mark.parametrize("status", [404, 403])
+def test_backfill_counts_a_weekday_with_no_index(conn, caplog, status):
+    respx.get(IDX.format("20261014")).respond(status, text="<html><body>Forbidden</body></html>")
+    with caplog.at_level("WARNING", logger="tape.pipeline"):
+        stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 15))
+    assert stats.missing_days == 1 and "missing_days=1" in stats.summary()
+    assert "no daily index for 2026-10-14" in caplog.text
+    assert _runs(conn)[0]["missing_days"] == 1
+
+
+@respx.mock
+def test_backfill_keeps_going_after_a_weekday_with_no_index(conn):
+    respx.get(IDX.format("20261013")).respond(404)
+    respx.get(IDX.format("20261014")).respond(200, text=(FIX / "form.idx").read_text())
+    _mock_filing(respx)
+    stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=2, end=date(2026, 10, 15))
+    assert stats.missing_days == 1 and stats.scored == 1
+
+
+@respx.mock
+def test_backfill_does_not_count_a_weekend_or_a_quiet_day(conn, caplog):
+    respx.get(IDX.format("20261009")).respond(200, text="")  # an index with no 8-Ks in it
+    # end=Mon Oct 12 with days=3 covers Fri 9, Sat 10, Sun 11; the weekend is never requested.
+    with caplog.at_level("WARNING", logger="tape.pipeline"):
+        stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=3, end=date(2026, 10, 12))
+    assert stats.missing_days == 0 and "missing_days" not in stats.summary()
+    assert "no daily index" not in caplog.text
+
+
 def test_today_et_lags_utc_in_the_evening():
     # 9:30pm EDT on Wed Oct 21 is already Thu Oct 22 in UTC.
     assert today_et(datetime(2026, 10, 22, 1, 30, tzinfo=UTC)) == date(2026, 10, 21)

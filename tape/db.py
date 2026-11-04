@@ -133,6 +133,11 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN feed_gap INTEGER NOT NULL DEFAULT 0;
     """,
+    # 9: weekdays a backfill found no daily index for. Its log line is gone by the time anyone asks why a
+    # day has no filings, and `tape stats` otherwise shows the hole as a quiet day.
+    """
+    ALTER TABLE runs ADD COLUMN missing_days INTEGER NOT NULL DEFAULT 0;
+    """,
 ]
 
 # Failed scoring attempts before a filing is left out of unscored(). Enough to ride out a Jev incident
@@ -309,18 +314,19 @@ def start_run(conn: sqlite3.Connection, kind: str, started_at: str | None = None
 def finish_run(conn: sqlite3.Connection, run_id: int, *, discovered: int = 0, fetched: int = 0,
                fetch_errors: int = 0, scored: int = 0, routes: Mapping[str, int] | None = None,
                cost_usd: float = 0.0, blocked: bool = False, feed_gap: bool = False,
-               error: str | None = None, finished_at: str | None = None) -> None:
+               missing_days: int = 0, error: str | None = None, finished_at: str | None = None) -> None:
     routes = routes or {}
     with transaction(conn):
         conn.execute(
             """
             UPDATE runs SET finished_at = ?, discovered = ?, fetched = ?, fetch_errors = ?, scored = ?,
                 routed_now = ?, routed_digest = ?, routed_log = ?, cost_usd = ?, blocked = ?, feed_gap = ?,
-                error = ?
+                missing_days = ?, error = ?
             WHERE id = ?
             """,
             (finished_at or _utc_now(), discovered, fetched, fetch_errors, scored, routes.get("now", 0),
-             routes.get("digest", 0), routes.get("log", 0), cost_usd, int(blocked), int(feed_gap), error, run_id),
+             routes.get("digest", 0), routes.get("log", 0), cost_usd, int(blocked), int(feed_gap), missing_days, error,
+             run_id),
         )
 
 

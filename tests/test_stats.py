@@ -132,6 +132,19 @@ def test_counts_runs_that_found_a_feed_gap(conn):
     assert "Feed may have dropped filings before 1 of 2 runs in window" in format_stats(s)
 
 
+def test_counts_missing_daily_indexes_in_the_window(conn):
+    for started_at, missing in [("2026-10-16T10:30:00Z", 2), ("2026-10-15T10:30:00Z", 1), ("2026-10-01T10:30:00Z", 5)]:
+        db.finish_run(conn, db.start_run(conn, "backfill", started_at=started_at), missing_days=missing)
+    s = collect(conn, days=2, today=TODAY)
+    assert s.missing_index_days == 3
+    assert "Backfills found no daily index 3 time(s) in window" in format_stats(s)
+
+
+def test_format_stats_omits_missing_index_line_when_none_were_missing(conn):
+    db.finish_run(conn, db.start_run(conn, "backfill", started_at="2026-10-16T10:30:00Z"))
+    assert "no daily index" not in format_stats(collect(conn, days=1, today=TODAY))
+
+
 def test_format_stats_omits_feed_gap_line_without_gaps(conn):
     db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z"))
     assert "Feed may have" not in format_stats(collect(conn, days=1, today=date(2026, 10, 16)))
