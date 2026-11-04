@@ -210,17 +210,17 @@ def test_plain_403_is_an_ordinary_status_error():
 
 
 @respx.mock
-def test_daily_index_missing_on_weekend_is_empty():
+def test_daily_index_missing_is_none():
     respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261011.idx").respond(404)
-    assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 11)) == []
+    assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 11)) is None
 
 
 @respx.mock
-def test_daily_index_plain_403_is_empty(caplog):
+def test_daily_index_plain_403_is_none(caplog):
     respx.get("https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.20261012.idx").respond(
         403, text="<html><body>Forbidden</body></html>")
     with caplog.at_level("INFO", logger="tape.edgar"):
-        assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 12)) == []
+        assert Edgar("ua", per_second=1000).daily_8k(date(2026, 10, 12)) is None
     assert "no daily index for 2026-10-12 (HTTP 403)" in caplog.text
 
 

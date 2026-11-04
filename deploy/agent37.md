@@ -56,12 +56,15 @@ this picks them up. When nothing was missed it costs one request per day read an
 days reaches the previous Friday across a Monday holiday. A daily index is dated by filing date, so an
 8-K accepted after 5:30 pm appears in the next business day's index and is picked up a day later.
 A pass that thinks it missed something ends its summary with `gap`, and `tape stats` counts them.
+A backfill that finds no daily index for a weekday logs a warning naming the date, ends its summary with
+`missing_days=N` and is counted in `tape stats` too. On a market holiday that's expected. Otherwise the
+next morning's window retries the day, and once a day has aged out of it, rerun with a wider `--days`.
 
 ### Exit status of `tape run` and `tape backfill`
 
 | Status | Meaning |
 | --- | --- |
-| 0 | Pass finished. `blocked` at the end of the summary means EDGAR blocked part of it; the rest was scored. `gap` means filings may have scrolled off the feed before this pass. |
+| 0 | Pass finished. `blocked` at the end of the summary means EDGAR blocked part of it; the rest was scored. `gap` means filings may have scrolled off the feed before this pass. `missing_days=N` means a backfill found no daily index for N weekdays. |
 | 2 | Bad configuration or command line. One line on stderr starting `error:` (or argparse's usage message) says what to fix; rerunning won't help until it's fixed. |
 | 75 | EDGAR blocked the host or could not be reached. One line on stderr says which; try again later (a block usually lifts in about 10 minutes). The run is still recorded in `tape stats`. |
 | other | A real failure. Rerun with `-v` for the traceback. |

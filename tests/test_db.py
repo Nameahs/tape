@@ -235,7 +235,7 @@ def test_run_lifecycle(conn):
     assert dict(row) | {"id": 0} == {
         "id": 0, "kind": "pass", "started_at": "2026-10-15T14:00:00Z", "finished_at": "2026-10-15T14:00:09Z",
         "discovered": 5, "fetched": 4, "fetch_errors": 1, "scored": 4, "routed_now": 1, "routed_digest": 0,
-        "routed_log": 3, "cost_usd": 0.012, "blocked": 0, "feed_gap": 0, "error": None,
+        "routed_log": 3, "cost_usd": 0.012, "blocked": 0, "feed_gap": 0, "missing_days": 0, "error": None,
     }
 
 
@@ -249,6 +249,28 @@ def test_feed_gap_run_is_recorded(conn):
     run_id = db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z")
     db.finish_run(conn, run_id, feed_gap=True)
     assert conn.execute("SELECT feed_gap FROM runs WHERE id = ?", (run_id,)).fetchone()[0] == 1
+
+
+def test_missing_days_are_recorded(conn):
+    run_id = db.start_run(conn, "backfill")
+    db.finish_run(conn, run_id, missing_days=2)
+    assert conn.execute("SELECT missing_days FROM runs WHERE id = ?", (run_id,)).fetchone()[0] == 2
+
+
+def test_missing_days_column_is_added_to_existing_runs(tmp_path):
+    path = tmp_path / "v8.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA)
+    for script in db.MIGRATIONS[:8]:
+        old.executescript(script)
+    old.execute("PRAGMA user_version = 8")
+    old.execute("INSERT INTO runs (kind, started_at) VALUES ('backfill', '2026-10-15T14:00:00Z')")
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    assert [r["missing_days"] for r in conn.execute("SELECT missing_days FROM runs")] == [0]
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
 def test_blocked_column_is_added_to_existing_runs(tmp_path):

@@ -150,7 +150,10 @@ class Edgar:
         xml = self.get(FEED_URL).text
         return FeedPage(parse_feed(xml), len(feedparser.parse(xml).entries) >= FEED_SIZE)
 
-    def daily_8k(self, day: date) -> list[FilingRef]:
+    def daily_8k(self, day: date) -> list[FilingRef] | None:
+        """The 8-Ks in `day`'s index, or None if EDGAR has no index for that day. None is not the same
+        as an empty list: an index with no 8-Ks is a quiet day, a missing one may be a late one.
+        """
         q = (day.month - 1) // 3 + 1
         url = f"{SEC}/Archives/edgar/daily-index/{day.year}/QTR{q}/form.{day:%Y%m%d}.idx"
         try:
@@ -161,7 +164,7 @@ class Edgar:
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (403, 404):  # weekends and holidays have no index
                 log.info("no daily index for %s (HTTP %d)", day, e.response.status_code)
-                return []
+                return None
             raise
 
     # Details -----------------------------------------------------------------------------

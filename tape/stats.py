@@ -20,7 +20,9 @@ WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) < julianday(
 """
 
 RUNS_SQL = """
-SELECT COUNT(*) AS n, COALESCE(SUM(blocked), 0) AS blocked, COALESCE(SUM(feed_gap), 0) AS feed_gaps FROM runs
+SELECT COUNT(*) AS n, COALESCE(SUM(blocked), 0) AS blocked, COALESCE(SUM(feed_gap), 0) AS feed_gaps,
+    COALESCE(SUM(missing_days), 0) AS missing_days
+FROM runs
 WHERE julianday(started_at) >= julianday(?) AND julianday(started_at) < julianday(?)
 """
 
@@ -49,6 +51,8 @@ class Stats:
     blocked_runs: int = 0
     # Of those, how many found the feed had moved on past filings they never saw.
     feed_gap_runs: int = 0
+    # Weekdays those runs found no daily index for, summed per run: overlapping backfills count a day twice.
+    missing_index_days: int = 0
 
 
 def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) -> Stats:
@@ -89,7 +93,8 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) 
     runs = conn.execute(RUNS_SQL, window).fetchone()
     return Stats(days=[buckets[k] for k in sorted(buckets)], spend_usd=float(spend["cost"]), calls=int(spend["n"]),
                  given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)),
-                 runs=int(runs["n"]), blocked_runs=int(runs["blocked"]), feed_gap_runs=int(runs["feed_gaps"]))
+                 runs=int(runs["n"]), blocked_runs=int(runs["blocked"]), feed_gap_runs=int(runs["feed_gaps"]),
+                 missing_index_days=int(runs["missing_days"]))
 
 
 def format_stats(s: Stats) -> str:
@@ -110,6 +115,11 @@ def format_stats(s: Stats) -> str:
         lines.append(
             f"Feed may have dropped filings before {s.feed_gap_runs:,} of {s.runs:,} runs in window "
             "(tape backfill --days N picks them up)"
+        )
+    if s.missing_index_days:
+        lines.append(
+            f"Backfills found no daily index {s.missing_index_days:,} time(s) in window; each backfill covering "
+            "a day counts it (expected for a market holiday, otherwise tape backfill --days N retries it)"
         )
     if s.given_up:
         lines.append(
