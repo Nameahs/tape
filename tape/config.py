@@ -46,6 +46,23 @@ def _parse_float(name: str, raw: str) -> float:
     return value
 
 
+# The cutoffs Jev's scores can actually reach: materiality runs 1 to 5, the others are probabilities. A value
+# outside its scale is a typo, and it fails silently: it looks like a run of quiet days or briefs every filing.
+_CUTOFF_RANGES = {
+    "brief_now": (1.0, 5.0),
+    "brief_now_with_surprise": (1.0, 5.0),
+    "digest": (1.0, 5.0),
+    "surprise": (0.0, 1.0),
+    "boilerplate": (0.0, 1.0),
+}
+
+
+def _check_cutoff(setting: str, cutoff: str, value: float) -> None:
+    low, high = _CUTOFF_RANGES[cutoff]
+    if not low <= value <= high:
+        raise ConfigError(f"{setting}: must be between {low:g} and {high:g}, got {value:g}")
+
+
 @dataclass(frozen=True)
 class Thresholds:
     """Router cutoffs on the 1 to 5 materiality scale."""
@@ -65,6 +82,10 @@ class Thresholds:
             unknown = set(values) - names
             if unknown:
                 raise ConfigError(f"unknown threshold(s) for {event}: {', '.join(sorted(unknown))}")
+            for cutoff, value in values.items():
+                _check_cutoff(f"TAPE_{cutoff.upper()}__{event.upper()}", cutoff, value)
+        for cutoff in names:
+            _check_cutoff(f"TAPE_{cutoff.upper()}", cutoff, getattr(self, cutoff))
 
     def for_event(self, event: str | None) -> Thresholds:
         """The cutoffs that apply to one event label, with its overrides folded in."""
@@ -100,6 +121,9 @@ def _event_overrides(env: Mapping[str, str]) -> dict[str, dict[str, float]]:
             continue
         cutoff, _, event = key.removeprefix("TAPE_").lower().partition("__")
         if cutoff not in names:
+            # Only a known event marks this as a misspelled override; anything else isn't ours to judge.
+            if event in EVENTS:
+                raise ConfigError(f"{key}: unknown threshold {cutoff!r}; expected one of {', '.join(sorted(names))}")
             continue
         if event not in EVENTS:
             raise ConfigError(f"{key}: unknown event {event!r}; expected one of {', '.join(EVENTS)}")

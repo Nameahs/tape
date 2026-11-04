@@ -1,6 +1,6 @@
 import pytest
 
-from tape.config import Settings
+from tape.config import Settings, Thresholds
 
 
 def test_defaults():
@@ -36,6 +36,57 @@ def test_unrelated_double_underscore_vars_are_ignored(monkeypatch):
     monkeypatch.setenv("TAPE_SOMETHING__ELSE", "x")
     monkeypatch.setenv("TAPE_DIGEST__MNA", "")
     assert Settings.from_env().thresholds.overrides == {}
+
+
+def test_event_override_with_misspelled_cutoff_fails_loudly(monkeypatch):
+    monkeypatch.setenv("TAPE_BRIEF_NOWW__MNA", "4.5")
+    with pytest.raises(ValueError, match=r"TAPE_BRIEF_NOWW__MNA: unknown threshold 'brief_noww'; expected .*brief_now"):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize(
+    ("name", "raw", "allowed"),
+    [
+        ("TAPE_BRIEF_NOW", "45", "between 1 and 5"),
+        ("TAPE_BRIEF_NOW_WITH_SURPRISE", "0.99", "between 1 and 5"),
+        ("TAPE_DIGEST", "0", "between 1 and 5"),
+        ("TAPE_SURPRISE", "70", "between 0 and 1"),
+        ("TAPE_BOILERPLATE", "-0.1", "between 0 and 1"),
+        ("TAPE_BRIEF_NOW__MNA", "5.1", "between 1 and 5"),
+        ("TAPE_SURPRISE__EARNINGS_GUIDANCE", "1.5", "between 0 and 1"),
+    ],
+)
+def test_threshold_out_of_range_names_the_variable(monkeypatch, name, raw, allowed):
+    monkeypatch.setenv(name, raw)
+    with pytest.raises(ValueError, match=f"{name}: must be {allowed}, got"):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize(
+    ("name", "raw"),
+    [
+        ("TAPE_BRIEF_NOW", "1"),
+        ("TAPE_BRIEF_NOW", "5"),
+        ("TAPE_DIGEST", "1"),
+        ("TAPE_DIGEST", "5.0"),
+        ("TAPE_SURPRISE", "0"),
+        ("TAPE_SURPRISE", "1"),
+        ("TAPE_BOILERPLATE", "0"),
+        ("TAPE_BOILERPLATE", "1"),
+        ("TAPE_BRIEF_NOW__MNA", "5"),
+        ("TAPE_SURPRISE__MNA", "0"),
+    ],
+)
+def test_threshold_boundary_values_are_accepted(monkeypatch, name, raw):
+    monkeypatch.setenv(name, raw)
+    Settings.from_env()
+
+
+def test_thresholds_built_in_code_are_checked_too():
+    with pytest.raises(ValueError, match="TAPE_DIGEST: must be between 1 and 5"):
+        Thresholds(digest=0.0)
+    with pytest.raises(ValueError, match="TAPE_BRIEF_NOW__MNA: must be between 1 and 5"):
+        Thresholds(overrides={"mna": {"brief_now": 45.0}})
 
 
 def test_jev_retry_settings_from_env(monkeypatch):
