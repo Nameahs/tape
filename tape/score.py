@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Protocol
 
-from typesafe_sdk import Choice, Noul, RetryPolicy, Score
+from typesafe_sdk import Choice, Noul, RetryPolicy, Score, TypeSafeAPIConnectionError, TypeSafeAPIError
 
 from tape.config import ConfigError
 from tape.db import ScoreRow
@@ -130,16 +130,18 @@ def score_many(
     """Score in parallel, yielding each result as soon as it finishes.
 
     Callers store results as they arrive, so an interrupted batch keeps what it already paid for.
-    A failed filing is logged and left unscored so the next pass retries it. `on_failure(row, exc)`, if
-    given, is called for each one from the caller's thread (not a worker), so it can write to the
-    caller's SQLite connection.
+    A failed filing is left unscored so the next pass retries it, and logged unless is_outage() says the
+    failure isn't about the filing: an outage would otherwise print one traceback per filing, so reporting
+    those is up to the caller. `on_failure(row, exc)`, if given, is called for each failure from the
+    caller's thread (not a worker), so it can write to the caller's SQLite connection.
     """
 
     def safe(row: Any) -> ScoreRow | Exception:
         try:
             return score_one(client, row, model, price_per_m)
         except Exception as e:
-            log.exception("scoring failed for %s", row["accession_no"])
+            if not is_outage(e):
+                log.exception("scoring failed for %s", row["accession_no"])
             return e
 
     pool = ThreadPoolExecutor(max_workers=workers)
@@ -161,6 +163,20 @@ def score_many(
 
 # Status codes worth another attempt: request timeout, rate limit, and server-side failures.
 RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+
+# Statuses that say nothing about the filing, beyond the 5xx range: a timeout, a rate limit, or a bad key.
+OUTAGE_STATUSES = frozenset({401, 403, 408, 429})
+
+
+def is_outage(exc: Exception) -> bool:
+    """Whether a scoring failure is about Jev or our account rather than the filing that happened to hit it.
+
+    These clear up on their own or once the key is fixed, so they must not count towards giving up on a
+    filing. Anything else, including a response we can't read, may repeat for this filing forever.
+    """
+    if isinstance(exc, TypeSafeAPIConnectionError):
+        return True
+    return isinstance(exc, TypeSafeAPIError) and (exc.status in OUTAGE_STATUSES or exc.status >= 500)
 
 
 def retry_policy(max_retries: int = 4, budget_s: float = 60.0) -> RetryPolicy:

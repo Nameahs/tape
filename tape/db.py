@@ -140,8 +140,8 @@ MIGRATIONS: list[str] = [
     """,
 ]
 
-# Failed scoring attempts before a filing is left out of unscored(). Enough to ride out a Jev incident
-# spanning a couple of passes, few enough that a filing Jev always rejects stops costing requests.
+# Failed scoring attempts before a filing is left out of unscored(). Few enough that a filing Jev always
+# rejects stops costing requests. Only failures about the filing itself count; see score.is_outage().
 MAX_SCORE_ATTEMPTS = 3
 
 # Failed fetches before ingest stops asking EDGAR for a filing. The latest-filings feed holds a bad filing
@@ -347,16 +347,20 @@ def unscored(conn: sqlite3.Connection, max_attempts: int = MAX_SCORE_ATTEMPTS) -
 
 
 def record_score_failure(conn: sqlite3.Connection, accession_no: str, error: str,
-                         at: str | None = None) -> int:
-    """Count one more failed scoring attempt for a filing. Returns the attempts so far."""
+                         at: str | None = None, count: bool = True) -> int:
+    """Store a failed scoring attempt for a filing. Returns the attempts so far.
+
+    With count=False the error is kept for inspection but doesn't move the filing towards being given up on.
+    """
     row = conn.execute(
         """
-        INSERT INTO score_failures (accession_no, attempts, last_error, last_attempt_at) VALUES (?, 1, ?, ?)
+        INSERT INTO score_failures (accession_no, attempts, last_error, last_attempt_at) VALUES (?, ?, ?, ?)
         ON CONFLICT (accession_no) DO UPDATE SET
-            attempts = attempts + 1, last_error = excluded.last_error, last_attempt_at = excluded.last_attempt_at
+            attempts = attempts + excluded.attempts, last_error = excluded.last_error,
+            last_attempt_at = excluded.last_attempt_at
         RETURNING attempts
         """,
-        (accession_no, error, at or _utc_now()),
+        (accession_no, int(count), error, at or _utc_now()),
     ).fetchone()
     return int(row["attempts"])
 

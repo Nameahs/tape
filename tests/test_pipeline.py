@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 import httpx
 import pytest
 import respx
+from typesafe_sdk import TypeSafeAPIError, TypeSafeAPITimeoutError
 
 from tape import db, pipeline
 from tape.config import Settings, Thresholds
@@ -395,6 +396,81 @@ def test_score_and_route_stops_retrying_a_filing_jev_keeps_rejecting(conn, caplo
     [row] = db.given_up(conn)
     assert (row["accession_no"], row["last_error"]) == (stuck.accession_no, "RuntimeError: boom")
     assert f"giving up on {stuck.accession_no}" in caplog.text
+
+
+def _api_error(status):
+    return TypeSafeAPIError(status, None, httpx.Headers())
+
+
+@pytest.mark.parametrize("error", [_api_error(s) for s in (401, 403, 408, 429, 500, 503)]
+                         + [TypeSafeAPITimeoutError(60.0)], ids=repr)
+def test_a_jev_outage_never_gives_up_on_a_filing(conn, caplog, error):
+    f = make_filing(1, clean_text="fine")
+    db.upsert_filing(conn, f)
+    conn.commit()
+    jev = FakeJev(error=error)
+
+    for _ in range(db.MAX_SCORE_ATTEMPTS + 2):
+        score_and_route(conn, jev, Settings(), PassStats())
+
+    assert len(jev.calls) == db.MAX_SCORE_ATTEMPTS + 2
+    assert db.given_up(conn) == [] and len(db.unscored(conn)) == 1
+    attempts, last_error = conn.execute("SELECT attempts, last_error FROM score_failures").fetchone()
+    assert attempts == 0 and last_error.startswith(type(error).__name__)
+    assert "giving up" not in caplog.text
+
+
+def test_filing_scores_once_a_jev_outage_ends(conn):
+    f = make_filing(1, clean_text="fine")
+    db.upsert_filing(conn, f)
+    conn.commit()
+    jev = FakeJev(error=_api_error(503))
+    for _ in range(db.MAX_SCORE_ATTEMPTS + 1):
+        score_and_route(conn, jev, Settings(), PassStats())
+
+    jev.error = None
+    stats = PassStats()
+    score_and_route(conn, jev, Settings(), stats)
+
+    assert stats.scored == 1
+    assert conn.execute("SELECT COUNT(*) FROM score_failures").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("status", [400, 404, 422])
+def test_a_rejected_filing_is_still_given_up_on(conn, status):
+    f = make_filing(1, clean_text="fine")
+    db.upsert_filing(conn, f)
+    conn.commit()
+    jev = FakeJev(error=_api_error(status))
+
+    for _ in range(db.MAX_SCORE_ATTEMPTS + 2):
+        score_and_route(conn, jev, Settings(), PassStats())
+
+    assert len(jev.calls) == db.MAX_SCORE_ATTEMPTS
+    assert [r["accession_no"] for r in db.given_up(conn)] == [f.accession_no]
+
+
+def test_an_outage_does_not_undo_attempts_a_rejected_filing_has_used(conn):
+    f = make_filing(1, clean_text="fine")
+    db.upsert_filing(conn, f)
+    db.record_score_failure(conn, f.accession_no, "TypeSafeAPIError: 400")
+    conn.commit()
+
+    score_and_route(conn, FakeJev(error=_api_error(503)), Settings(), PassStats())
+
+    assert conn.execute("SELECT attempts FROM score_failures").fetchone()[0] == 1
+
+
+def test_an_outage_logs_one_warning_per_pass_and_no_tracebacks(conn, caplog):
+    for n in (1, 2, 3):
+        db.upsert_filing(conn, make_filing(n, clean_text="fine"))
+    conn.commit()
+
+    score_and_route(conn, FakeJev(error=_api_error(503)), Settings(), PassStats())
+
+    [record] = [r for r in caplog.records if r.levelname in ("WARNING", "ERROR")]
+    assert "left 3 filing(s) for a later pass" in record.getMessage() and "503" in record.getMessage()
+    assert record.exc_info is None
 
 
 def test_score_and_route_clears_a_failure_once_the_filing_scores(conn):
