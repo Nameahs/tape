@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from tape import db
 from tape.dashboard import DAILY_SQL, _daily, _daily_chart, build, write
 from tests.conftest import make_filing, make_score
@@ -52,6 +54,32 @@ def test_write(conn, tmp_path):
     _seed(conn)
     out = write(conn, tmp_path / "d" / "dash.html", tmp_path / "missing.json")
     assert out.read_text().startswith("<!doctype html>")
+
+
+@pytest.mark.parametrize("text", ['{"n": 1200, "gap_rat', "", "[]", "null"])
+def test_write_with_unusable_report_leaves_out_evaluation(text, conn, tmp_path, caplog):
+    _seed(conn)
+    report = tmp_path / "eval.json"
+    report.write_text(text)
+
+    html = write(conn, tmp_path / "dash.html", report).read_text()
+
+    assert "No evaluation yet" in html
+    assert str(report) in caplog.text
+    assert report.read_text() == text  # left for someone to look at
+
+
+def test_failed_write_keeps_previous_dashboard(conn, tmp_path, monkeypatch):
+    out = tmp_path / "dash.html"
+    out.write_text("old page")
+
+    def fail(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("os.replace", fail)
+    with pytest.raises(OSError):
+        write(conn, out, None)
+    assert out.read_text() == "old page"
 
 
 def _score_at(conn, n, scored_at, cost):

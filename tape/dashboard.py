@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 from datetime import UTC, date, datetime, time, timedelta
@@ -10,6 +11,9 @@ from html import escape
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from tape.files import write_atomic
+
+log = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
 DAILY_DAYS = 14
 # Must keep the exact julianday(scored_at) expression so SQLite seeks on idx_scores_scored_jd.
@@ -245,7 +249,19 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
 
 
 def write(conn: sqlite3.Connection, out: Path, report_path: Path | None) -> Path:
-    report = json.loads(report_path.read_text()) if report_path and report_path.exists() else None
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(build(conn, report))
+    report = _read_report(report_path) if report_path and report_path.exists() else None
+    write_atomic(out, build(conn, report))
     return out
+
+
+def _read_report(path: Path) -> dict | None:
+    """The report, or None if it can't be used: one bad file shouldn't take the rest of the page down."""
+    try:
+        report = json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        log.warning("ignoring unreadable eval report %s: %s", path, e)
+        return None
+    if not isinstance(report, dict):
+        log.warning("ignoring unreadable eval report %s: not a JSON object", path)
+        return None
+    return report

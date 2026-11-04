@@ -305,6 +305,19 @@ def test_evaluate_with_too_few_outcomes_keeps_earlier_report(tmp_path, monkeypat
     assert out.read_text() == '{"n": 25}'
 
 
+def test_dashboard_survives_a_truncated_report(tmp_path, monkeypatch, capsys, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    report = tmp_path / "eval.json"
+    report.write_text('{"n": 25, "gap')
+    out = tmp_path / "dash.html"
+
+    assert main(["dashboard", "--out", str(out), "--report", str(report)]) == 0
+    assert out.read_text().startswith("<!doctype html>")
+    assert "ignoring unreadable eval report" in caplog.text
+
+
 def _seed_outcomes(path, n=25):
     conn = db.connect(path)
     for i in range(n):

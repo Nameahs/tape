@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import os
 import re
 import threading
 import time
@@ -25,6 +24,7 @@ from bs4 import BeautifulSoup
 
 from tape.clean import build_state_text
 from tape.db import Filing
+from tape.files import write_atomic
 
 SEC = "https://www.sec.gov"
 ET = ZoneInfo("America/New_York")
@@ -212,7 +212,7 @@ class Edgar:
             log.warning("ticker map refresh failed; using stale cache at %s", path)
             return cached
         if path is not None:
-            _write_atomic(path, resp.text)
+            _write_ticker_cache(path, resp.text)
         return data
 
     def fetch(self, ref: FilingRef, max_chars: int) -> Filing:
@@ -258,13 +258,9 @@ def _read_json(path: Path) -> dict | None:
         return None
 
 
-def _write_atomic(path: Path, text: str) -> None:
-    """Write via a temp file and rename so a concurrent reader never sees half a file."""
+def _write_ticker_cache(path: Path, text: str) -> None:
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(text)
-        os.replace(tmp, path)
+        write_atomic(path, text)
     except OSError:
         log.warning("could not write ticker cache to %s", path, exc_info=True)
 
