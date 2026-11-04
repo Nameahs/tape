@@ -148,6 +148,7 @@ def test_verbose_keeps_the_configuration_traceback(tmp_path, monkeypatch, caplog
 
 def test_other_value_errors_are_not_mistaken_for_configuration(tmp_path, monkeypatch):
     _config_env(tmp_path, monkeypatch)
+    assert main(["init"]) == 0
 
     def broken(*_args):
         raise ValueError("a bug")
@@ -369,6 +370,7 @@ class _Stop(Exception):
 @pytest.mark.parametrize(("argv", "expected"), [([], PRICE_LOOKBACK_DAYS), (["--days", "140"], 140)])
 def test_evaluate_passes_lookback_to_compute_outcomes(argv, expected, tmp_path, monkeypatch):
     monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
+    assert main(["init"]) == 0
     seen = {}
 
     def fake_compute(conn, prices, lookback_days):
@@ -553,3 +555,73 @@ def test_backfill_with_edgar_unreachable_is_tempfail(tmp_path, monkeypatch, caps
     assert "EDGAR request failed (timed out)" in capsys.readouterr().err
     (run,) = _runs(path)
     assert run["error"].startswith("ConnectTimeout:")
+
+
+def _read_commands(tmp_path):
+    out = tmp_path / "out"
+    return [
+        (["pending"], 0),
+        (["digest"], 0),
+        (["stats"], 0),
+        (["reroute"], 0),
+        (["evaluate", "--skip-prices", "--out", str(out / "eval.json")], 0),
+        (["dashboard", "--out", str(out / "d.html"), "--report", str(out / "eval.json")], 0),
+        # Reaches the store and reports the unknown filing, rather than the missing store.
+        (["brief", "0000000001-26-000001", "--text", "x"], 1),
+    ]
+
+
+@pytest.mark.parametrize("index", range(7))
+def test_read_commands_refuse_a_missing_store(index, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "wrong" / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    argv, _ = _read_commands(tmp_path)[index]
+
+    assert main(argv) == 2
+
+    captured = capsys.readouterr()
+    assert captured.err == (f"error: no Tape store at {path}; check TAPE_DB_PATH, or run tape init to create one\n")
+    assert captured.out == ""
+    assert not path.parent.exists()
+
+
+def test_digest_send_with_a_missing_store_tells_nobody(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+
+    with respx.mock(assert_all_called=False) as router:
+        assert main(["digest", "--send"]) == 2
+    assert not router.calls
+    assert "nothing material" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("index", range(7))
+def test_read_commands_work_after_init(index, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
+    assert main(["init"]) == 0
+    capsys.readouterr()
+    argv, status = _read_commands(tmp_path)[index]
+
+    assert main(argv) == status
+    assert "no Tape store" not in capsys.readouterr().err
+
+
+def test_init_creates_the_store_and_its_folder(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "data" / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+
+    assert main(["init"]) == 0
+
+    assert path.is_file()
+    assert f"store ready at {path}" in capsys.readouterr().out
+
+
+@respx.mock
+def test_run_creates_a_missing_store(tmp_path, monkeypatch):
+    path = _edgar_env(tmp_path, monkeypatch)
+    assert not path.exists()
+    respx.get(FEED_URL).mock(return_value=httpx.Response(503))
+    # Status doesn't matter here: the store has to exist for the run to be recorded either way.
+    main(["run"])
+    assert path.is_file()

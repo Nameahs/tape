@@ -23,6 +23,7 @@ filings it routed `now`. Do not re-score or second-guess the routing.
    filings may be waiting for a brief), and don't retry `tape run` yourself; the next scheduled
    run will.
 2. Run `tape pending`. It prints a JSON list. If the list is empty, stop: send nothing.
+   If it exits with status 2 and prints a line starting `error:`, report that line and stop.
 3. For each item, open its `url` (the EDGAR filing index), then open the main 8-K document and
    the EX-99.1 press release if there is one. Read enough to answer: what happened, how big
    is it, and what changes for shareholders.

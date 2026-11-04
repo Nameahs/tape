@@ -176,9 +176,18 @@ class ScoreRow:
     materiality_probs: str | None = None  # JSON list, probability of levels 1..5
 
 
-def connect(path: Path | str) -> sqlite3.Connection:
+class StoreNotFound(Exception):
+    """connect(create=False) found no database at the path."""
+
+
+def connect(path: Path | str, create: bool = True) -> sqlite3.Connection:
+    """Open the store and bring its schema up to date. With create=False a missing database raises
+    StoreNotFound instead of being created, along with any folders leading to it.
+    """
     path = Path(path)
     if str(path) != ":memory:":
+        if not create and not path.is_file():
+            raise StoreNotFound(str(path))
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
