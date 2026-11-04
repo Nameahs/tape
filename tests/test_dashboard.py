@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from tape import db
-from tape.dashboard import DAILY_SQL, _daily, _daily_chart, build, write
+from tape.dashboard import DAILY_SQL, SCORING_SQL, _daily, _daily_chart, build, write
 from tests.conftest import make_filing, make_score
 
 NOW = datetime(2026, 10, 13, 22, 0, tzinfo=UTC)
@@ -133,4 +133,31 @@ def test_daily_chart_empty_when_no_spend(conn):
 def test_daily_query_seeks_on_the_scored_at_index(conn):
     window = ("2026-10-01T00:00:00+00:00",)
     plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + DAILY_SQL, window))
+    assert "USING INDEX idx_scores_scored_jd" in plan
+
+
+def test_scoring_tiles_include_backfills_not_old_scoring_of_recent_filings(conn):
+    old = make_filing(1, company="Backfill", accepted_at="2020-01-01T12:00:00Z")
+    recent = make_filing(2, company="Recent", accepted_at="2026-10-13T20:00:00Z")
+    for filing, scored_at, cost in (
+        (old, "2026-10-13T21:00:00Z", 1.25),
+        (recent, "2026-10-12T21:59:59Z", 9.0),
+    ):
+        db.upsert_filing(conn, filing)
+        db.upsert_score(conn, make_score(filing.accession_no, cost_usd=cost))
+        conn.execute("UPDATE scores SET scored_at = ? WHERE accession_no = ?", (scored_at, filing.accession_no))
+        db.set_route(conn, filing.accession_no, "now")
+
+    html = build(conn, None, NOW)
+
+    assert 'Filings scored, 24h</span><b>1</b>' in html
+    assert 'Jev cost, 24h</span><b>$1.2500</b>' in html
+    assert '<td>Tue Oct 13</td><td class="num">1</td><td class="num">$1.2500</td>' in html
+    assert 'Briefed now</span><b>1</b>' in html
+    assert "Backfill" not in html and "Recent" in html
+
+
+def test_scoring_tiles_query_seeks_on_the_scored_at_index(conn):
+    window = ("2026-10-12T22:00:00+00:00",)
+    plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + SCORING_SQL, window))
     assert "USING INDEX idx_scores_scored_jd" in plan
