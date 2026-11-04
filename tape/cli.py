@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 from tape import db
 from tape.config import ConfigError, Settings, require_contact
+from tape.files import write_atomic
 
 log = logging.getLogger(__name__)
 
@@ -193,9 +194,7 @@ def cmd_evaluate(args, settings, conn) -> int:
         print(f"not enough outcomes to evaluate yet: {e.have} of {e.need}; report not written")
         return 0
     print(format_report(report))
-    out = Path(args.out)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(report.to_json())
+    write_atomic(Path(args.out), report.to_json())
     return 0
 
 
