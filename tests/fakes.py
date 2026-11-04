@@ -4,12 +4,15 @@ from types import SimpleNamespace
 
 
 class FakeJev:
-    def __init__(self, fail_on: set[str] | None = None) -> None:
+    def __init__(self, fail_on: set[str] | None = None, error: Exception | None = None) -> None:
         self.calls = []
         self.fail_on = fail_on or set()
+        self.error = error  # raised on every call while set
 
     def system_one(self, state, questions, *, model=None):
         self.calls.append((state, questions, model))
+        if self.error is not None:
+            raise self.error
         text = state["text"].lower()
         if any(word in text for word in self.fail_on):
             raise RuntimeError("boom")

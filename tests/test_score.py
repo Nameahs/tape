@@ -3,10 +3,18 @@ import threading
 import time
 
 import pytest
-from typesafe_sdk import Choice, Noul, Score, TypeSafeAPIError
+from typesafe_sdk import (
+    Choice,
+    Noul,
+    Score,
+    TypeSafeAPIConnectionError,
+    TypeSafeAPIError,
+    TypeSafeAPIResponseValidationError,
+    TypeSafeAPITimeoutError,
+)
 
 from tape import db
-from tape.score import EVENTS, MATERIALITY_LEVELS, QUESTIONS, score_many, score_one, state_for
+from tape.score import EVENTS, MATERIALITY_LEVELS, QUESTIONS, is_outage, score_many, score_one, state_for
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
 
@@ -60,6 +68,29 @@ def test_score_many_skips_failures(conn):
     rows = [_row(conn, 1, clean_text="fine"), _row(conn, 2, clean_text="explode please")]
     out = list(score_many(FakeJev(fail_on={"explode"}), rows, "m", 0.042, workers=2))
     assert [s.accession_no for s in out] == [rows[0]["accession_no"]]
+
+
+@pytest.mark.parametrize(
+    ("exc", "outage"),
+    [
+        (TypeSafeAPIError(401, None, {}), True),
+        (TypeSafeAPIError(403, None, {}), True),
+        (TypeSafeAPIError(408, None, {}), True),
+        (TypeSafeAPIError(429, None, {}), True),
+        (TypeSafeAPIError(500, None, {}), True),
+        (TypeSafeAPIError(503, None, {}), True),
+        (TypeSafeAPIConnectionError("refused"), True),
+        (TypeSafeAPITimeoutError(60.0), True),
+        (TypeSafeAPIError(400, None, {}), False),
+        (TypeSafeAPIError(404, None, {}), False),
+        (TypeSafeAPIError(422, None, {}), False),
+        (TypeSafeAPIResponseValidationError(200, None, {}, "answers.event"), False),
+        (KeyError("materiality"), False),
+    ],
+    ids=repr,
+)
+def test_is_outage(exc, outage):
+    assert is_outage(exc) is outage
 
 
 def test_score_many_reports_failures_on_the_callers_thread(conn):

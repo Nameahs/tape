@@ -14,7 +14,7 @@ from tape import db
 from tape.config import Settings
 from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FeedPage, FilingRef
 from tape.route import route
-from tape.score import SystemOneClient, score_many
+from tape.score import SystemOneClient, is_outage, score_many
 
 log = logging.getLogger(__name__)
 
@@ -143,10 +143,16 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
     if not rows:
         return
 
+    outages: list[Exception] = []
+
     def failed(row, exc: Exception) -> None:
+        outage = is_outage(exc)
         with db.transaction(conn):
-            attempts = db.record_score_failure(conn, row["accession_no"], f"{type(exc).__name__}: {exc}"[:500])
-        if attempts >= db.MAX_SCORE_ATTEMPTS:
+            attempts = db.record_score_failure(conn, row["accession_no"], f"{type(exc).__name__}: {exc}"[:500],
+                                               count=not outage)
+        if outage:
+            outages.append(exc)
+        elif attempts >= db.MAX_SCORE_ATTEMPTS:
             log.warning("giving up on %s after %d failed scoring attempts", row["accession_no"], attempts)
 
     for s in score_many(jev, rows, settings.jev_model, settings.jev_input_price_per_m, on_failure=failed):
@@ -158,6 +164,9 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
         stats.scored += 1
         stats.routes[r] += 1
         stats.cost_usd += s.cost_usd or 0.0
+    if outages:
+        log.warning("Jev is unavailable; left %d filing(s) for a later pass (last error: %s)",
+                    len(outages), outages[-1])
 
 
 def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime | None = None,
