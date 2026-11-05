@@ -51,6 +51,7 @@ log = logging.getLogger(__name__)
 _TITLE = re.compile(r"^(?P<form>\S+) - (?P<company>.+?) \((?P<cik>\d{10})\)")
 _ACC = re.compile(r"(\d{10}-\d{2}-\d{6})")
 _ITEM = re.compile(r"Item (\d\.\d{2})")
+_INDEX_LINE = re.compile(r"^8-K\s+(?P<listing>.+?)\s+\d{8}\s+(?P<path>edgar/data/(?P<cik>\d+)/\S+)\s*$")
 
 
 class EdgarBlockedError(httpx.HTTPStatusError):
@@ -283,23 +284,37 @@ def parse_feed(xml: str) -> list[FilingRef]:
 
 
 def parse_form_index(text: str) -> list[FilingRef]:
-    """Parse an EDGAR daily form.idx file (fixed-width columns after a dashed rule)."""
+    """Parse the 8-Ks out of an EDGAR daily form.idx file (fixed-width columns after a dashed rule).
+
+    Fields are read from the ends of the line, not split on spacing: a company name can hold a double
+    space, or fill its column and run straight into the CIK. The path's folder gives the CIK, so a name
+    ending in digits can't be mistaken for part of it. A line we can't read is a filing lost for good,
+    since the backfill is what repairs the feed, so it gets a warning.
+    """
     refs = []
     body = text.split("\n-", 1)[-1].split("\n", 1)[-1]
     for line in body.splitlines():
-        if not line.startswith("8-K "):
-            continue
-        parts = re.split(r"\s{2,}", line.strip())
-        if len(parts) < 5:
-            continue
-        form, company, cik, _filed, path = parts[:5]
-        acc = _ACC.search(path)
-        if not acc:
-            continue
-        acc_no = acc[1]
-        folder = f"{SEC}/Archives/edgar/data/{int(cik)}/{acc_no.replace('-', '')}"
-        refs.append(FilingRef(acc_no, f"{int(cik):010d}", company, form, f"{folder}/{acc_no}-index.htm"))
+        if line.startswith("8-K "):
+            ref = _parse_index_line(line)
+            if ref is None:
+                log.warning("skipping an 8-K line we can't read in the daily index: %r", line)
+            else:
+                refs.append(ref)
     return _dedupe(refs)
+
+
+def _parse_index_line(line: str) -> FilingRef | None:
+    m = _INDEX_LINE.match(line)
+    acc = _ACC.search(m["path"]) if m else None
+    if not m or not acc or not m["listing"].endswith(m["cik"]):
+        return None
+    company = " ".join(m["listing"].removesuffix(m["cik"]).split())
+    if not company:
+        return None
+    acc_no = acc[1]
+    cik = int(m["cik"])
+    folder = f"{SEC}/Archives/edgar/data/{cik}/{acc_no.replace('-', '')}"
+    return FilingRef(acc_no, f"{cik:010d}", company, "8-K", f"{folder}/{acc_no}-index.htm")
 
 
 def _dedupe(refs: list[FilingRef]) -> list[FilingRef]:
