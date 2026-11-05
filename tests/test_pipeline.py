@@ -263,6 +263,31 @@ def test_blocked_feed_still_scores_stored_filings(conn, caplog):
     assert run["error"] is None and run["scored"] == 1 and run["blocked"] == 1
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.Response(503), httpx.ConnectTimeout("timed out")],
+    ids=["503", "timeout"],
+)
+@respx.mock
+def test_failed_feed_still_scores_stored_filings(conn, monkeypatch, failure):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda _s: None)
+    # Stored on an earlier pass, but Jev timed out before it was scored; no ticker yet either.
+    _store_recent_without_ticker(conn)
+    respx.get(FEED_URL).mock(side_effect=[failure] * 4)
+    tickers = respx.get(TICKERS_URL).respond(200, json={})
+    jev = FakeJev()
+
+    with pytest.raises(httpx.HTTPError):
+        run_pass(conn, Edgar("ua", per_second=1000), jev, Settings())
+
+    assert not tickers.called  # another EDGAR download, with its own retries
+    assert len(jev.calls) == 1
+    assert db.unscored(conn) == []
+    [run] = _runs(conn)
+    assert run["scored"] == 1 and run["cost_usd"] > 0 and not run["blocked"]
+    assert run["error"].startswith(("HTTPStatusError:", "ConnectTimeout:"))
+
+
 @respx.mock
 def test_block_mid_ingest_skips_the_ticker_backfill(conn):
     respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
