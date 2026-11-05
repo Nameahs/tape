@@ -146,6 +146,28 @@ def test_score_many_stops_sending_when_the_caller_stops(conn):
     assert [state["text"] for state, _, _ in jev.calls] == ["first", "second"]
 
 
+def test_score_many_only_takes_filings_it_has_a_worker_for():
+    taken = []
+
+    def rows():
+        for n in range(1, 51):
+            taken.append(n)
+            yield {"accession_no": str(n), "company": "Acme", "form": "8-K", "items": "", "clean_text": "fine"}
+
+    results = score_many(FakeJev(), rows(), "m", 0.042, workers=2)
+    next(results)
+    assert len(taken) <= 4  # two in flight, and up to two more if both finished before the first result
+    results.close()
+    assert len(taken) <= 4
+
+
+def test_score_many_scores_a_whole_batch_larger_than_its_workers():
+    rows = [{"accession_no": str(n), "company": "Acme", "form": "8-K", "items": "", "clean_text": "fine"}
+            for n in range(1, 21)]
+    out = list(score_many(FakeJev(), rows, "m", 0.042, workers=3))
+    assert sorted(s.accession_no for s in out) == sorted(r["accession_no"] for r in rows)
+
+
 def test_contract_with_real_sdk(conn):
     """Run the real TypeSafe client over a mock transport: request shape in, typed answers out."""
     import httpx2
