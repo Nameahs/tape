@@ -10,6 +10,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 
+import httpx
+
 from tape import db
 from tape.config import Settings
 from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FeedPage, FilingRef
@@ -198,6 +200,7 @@ def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime |
 
 def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings) -> PassStats:
     with recorded(conn, "pass") as stats:
+        feed_error: httpx.HTTPError | None = None
         try:
             page = edgar.latest_8k()
         except EdgarBlockedError:
@@ -205,16 +208,22 @@ def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
             # timeout) still get scored and routed instead of waiting out the block.
             stats.blocked = True
             log.warning("EDGAR is blocking requests; skipping the feed this pass", exc_info=True)
+        except httpx.HTTPError as e:
+            # The same goes for a timeout or a 5xx, except that the pass still ends as a failure below.
+            feed_error = e
         else:
             if feed_gap(conn, page):
                 stats.feed_gap = True
                 log.warning("none of the %d filings on a full feed are stored; older filings may have been "
                             "missed until the next tape backfill", len(page.refs))
             ingest(conn, edgar, page.refs, settings, stats)
-        if not stats.blocked:
-            # The ticker map is another EDGAR download; asking for it now would only prolong the block.
+        if not stats.blocked and feed_error is None:
+            # The ticker map is another EDGAR download; asking for it now would only prolong the block
+            # or wait out the same retries the feed just did.
             fill_missing_tickers(conn, edgar)
         score_and_route(conn, jev, settings, stats)
+        if feed_error is not None:
+            raise feed_error
     return stats
 
 

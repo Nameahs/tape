@@ -1,6 +1,7 @@
 import json
 import logging
 import sys
+from contextlib import closing
 from datetime import date
 
 import httpx
@@ -556,6 +557,21 @@ def test_run_with_feed_down_is_one_line_and_tempfail(tmp_path, monkeypatch, caps
     assert "Traceback" not in captured.err
     (run,) = _runs(path)
     assert run["kind"] == "pass" and run["error"].startswith("HTTPStatusError:") and not run["blocked"]
+
+
+@respx.mock
+def test_run_with_feed_down_scores_stored_filings_and_is_tempfail(tmp_path, monkeypatch, capsys):
+    path = _edgar_env(tmp_path, monkeypatch)
+    with closing(db.connect(path)) as conn:
+        db.upsert_filing(conn, make_filing(1))
+        conn.commit()
+    respx.get(FEED_URL).mock(side_effect=httpx.ReadTimeout("timed out"))
+
+    assert main(["run"]) == EXIT_TEMPFAIL
+
+    assert capsys.readouterr().err.startswith("EDGAR request failed (timed out)")
+    (run,) = _runs(path)
+    assert run["scored"] == 1 and run["error"].startswith("ReadTimeout:")
 
 
 @respx.mock
