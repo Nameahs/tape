@@ -52,7 +52,7 @@ lock held exits 1. The other commands only read the store, or write a single bri
 | `TAPE_JEV_MODEL` | `jev-latest` | Jev model name |
 | `TAPE_MAX_CHARS` | `12000` | Filing characters sent to Jev |
 | `TAPE_JEV_MAX_RETRIES` | `4` | Retries per filing on Jev timeouts, rate limits and 5xx errors; `0` disables |
-| `TAPE_JEV_RETRY_BUDGET_S` | `60` | Most seconds spent on one filing, retries included, before it waits for the next pass |
+| `TAPE_JEV_RETRY_BUDGET_S` | `60` | Most seconds spent on one filing, retries included, before it waits for the next pass. A pass stops sending filings after 3 in a row fail this way, so an outage doesn't cost this much per filing |
 | `TAPE_BRIEF_NOW`, `TAPE_DIGEST`, ... | see `tape/config.py` | Router thresholds. Materiality cutoffs must be 1 to 5, `TAPE_SURPRISE` and `TAPE_BOILERPLATE` 0 to 1 |
 | `TAPE_<THRESHOLD>__<EVENT>` | none | Per-event override, e.g. `TAPE_BRIEF_NOW__EARNINGS_GUIDANCE=4.5`; event labels are the keys of `EVENTS` in `tape/score.py` |
 

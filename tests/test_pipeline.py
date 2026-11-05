@@ -473,6 +473,27 @@ def test_an_outage_logs_one_warning_per_pass_and_no_tracebacks(conn, caplog):
     assert record.exc_info is None
 
 
+def test_an_outage_leaves_most_of_a_large_backlog_unsent_and_says_so(conn, caplog):
+    for n in range(1, 101):
+        db.upsert_filing(conn, make_filing(n, clean_text="fine"))
+    conn.commit()
+    jev = FakeJev(error=_api_error(503))
+
+    score_and_route(conn, jev, Settings(), PassStats())
+
+    assert len(jev.calls) < 15
+    [record] = [r for r in caplog.records if r.levelname in ("WARNING", "ERROR")]
+    assert f"left 100 filing(s) for a later pass, {100 - len(jev.calls)} of them not sent" in record.getMessage()
+    assert len(db.unscored(conn)) == 100
+
+    jev.error = None
+    stats = PassStats()
+    score_and_route(conn, jev, Settings(), stats)
+
+    assert stats.scored == 100
+    assert conn.execute("SELECT COUNT(*) FROM score_failures").fetchone()[0] == 0
+
+
 def test_score_and_route_clears_a_failure_once_the_filing_scores(conn):
     f = make_filing(1, clean_text="fine")
     db.upsert_filing(conn, f)
