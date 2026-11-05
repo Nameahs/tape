@@ -6,7 +6,8 @@ import json
 import logging
 import time
 from collections.abc import Callable, Iterable, Iterator
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from itertools import islice
 from typing import Any, Protocol
 
 from typesafe_sdk import Choice, Noul, RetryPolicy, Score, TypeSafeAPIConnectionError, TypeSafeAPIError
@@ -123,17 +124,29 @@ def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float)
     )
 
 
+# How many filings in a row can fail with an outage error before a batch stops sending more. Enough that one
+# slow filing or a brief blip doesn't end the batch, since the unsent filings only wait for the next pass.
+OUTAGE_STOP_AFTER = 3
+
+
 def score_many(
     client: SystemOneClient, rows: Iterable[Any], model: str, price_per_m: float, workers: int = 8,
     on_failure: Callable[[Any, Exception], None] | None = None,
+    on_stop: Callable[[int], None] | None = None,
 ) -> Iterator[ScoreRow]:
     """Score in parallel, yielding each result as soon as it finishes.
 
-    Callers store results as they arrive, so an interrupted batch keeps what it already paid for.
+    Callers store results as they arrive, so an interrupted batch keeps what it already paid for. A filing
+    is only handed to a worker once one is free, so what happens next can still decide whether it goes out.
     A failed filing is left unscored so the next pass retries it, and logged unless is_outage() says the
     failure isn't about the filing: an outage would otherwise print one traceback per filing, so reporting
     those is up to the caller. `on_failure(row, exc)`, if given, is called for each failure from the
     caller's thread (not a worker), so it can write to the caller's SQLite connection.
+
+    After OUTAGE_STOP_AFTER outage failures in a row nothing more is sent: each further filing would spend its
+    whole retry budget learning the same thing. Calls in flight finish as usual, and any other answer from Jev
+    picks the batch back up. If filings are left unsent when those finish, `on_stop(count)` is called with
+    how many, from the caller's thread.
     """
 
     def safe(row: Any) -> ScoreRow | Exception:
@@ -144,21 +157,39 @@ def score_many(
                 log.exception("scoring failed for %s", row["accession_no"])
             return e
 
+    queue = iter(rows)
+    pending: dict[Future[ScoreRow | Exception], Any] = {}
     pool = ThreadPoolExecutor(max_workers=workers)
+    outages_in_a_row = 0
+
+    def top_up() -> None:
+        if outages_in_a_row >= OUTAGE_STOP_AFTER:
+            return
+        for row in islice(queue, workers - len(pending)):
+            pending[pool.submit(safe, row)] = row
+
     try:
-        futures = {pool.submit(safe, row): row for row in rows}
-        for future in as_completed(futures):
-            result = future.result()
-            if isinstance(result, Exception):
-                if on_failure is not None:
-                    on_failure(futures[future], result)
-                continue
-            yield result
+        top_up()
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                row = pending.pop(future)
+                result = future.result()
+                outages_in_a_row = outages_in_a_row + 1 if isinstance(result, Exception) and is_outage(result) else 0
+                top_up()  # first: the worker shouldn't sit idle while the caller stores this result
+                if isinstance(result, Exception):
+                    if on_failure is not None:
+                        on_failure(row, result)
+                    continue
+                yield result
+        unsent = sum(1 for _ in queue)
+        if unsent and on_stop is not None:
+            on_stop(unsent)
     finally:
-        # If the caller stops early (Ctrl-C, job timeout, an exception while storing), drop the
-        # filings not yet sent rather than waiting for and paying for the rest of the batch.
+        # If the caller stops early (Ctrl-C, job timeout, an exception while storing), the filings not
+        # yet sent stay unsent rather than being waited for and paid for.
         # Calls already in flight finish in the background; their results are discarded.
-        pool.shutdown(wait=False, cancel_futures=True)
+        pool.shutdown(wait=False)
 
 
 # Status codes worth another attempt: request timeout, rate limit, and server-side failures.

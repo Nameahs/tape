@@ -144,6 +144,11 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
         return
 
     outages: list[Exception] = []
+    unsent = 0
+
+    def stopped(count: int) -> None:
+        nonlocal unsent
+        unsent = count
 
     def failed(row, exc: Exception) -> None:
         outage = is_outage(exc)
@@ -155,7 +160,8 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
         elif attempts >= db.MAX_SCORE_ATTEMPTS:
             log.warning("giving up on %s after %d failed scoring attempts", row["accession_no"], attempts)
 
-    for s in score_many(jev, rows, settings.jev_model, settings.jev_input_price_per_m, on_failure=failed):
+    for s in score_many(jev, rows, settings.jev_model, settings.jev_input_price_per_m, on_failure=failed,
+                        on_stop=stopped):
         with db.transaction(conn):
             db.upsert_score(conn, s)
             db.clear_score_failure(conn, s.accession_no)
@@ -165,8 +171,8 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
         stats.routes[r] += 1
         stats.cost_usd += s.cost_usd or 0.0
     if outages:
-        log.warning("Jev is unavailable; left %d filing(s) for a later pass (last error: %s)",
-                    len(outages), outages[-1])
+        log.warning("Jev is unavailable; left %d filing(s) for a later pass, %d of them not sent (last error: %s)",
+                    len(outages) + unsent, unsent, outages[-1])
 
 
 def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime | None = None,
