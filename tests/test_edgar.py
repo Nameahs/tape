@@ -336,6 +336,56 @@ def test_parse_feed_dedupes_co_registrants():
     assert refs[0].company == "Parent Utility Inc"  # first listing wins
 
 
+def _form_index(*lines: str) -> str:
+    return "Form Type   Company Name\n" + "-" * 80 + "\n" + "\n".join(lines) + "\n"
+
+
+def _index_line(company: str, cik: str = "7") -> str:
+    # The column widths of EDGAR's form.idx: a name of 62 characters leaves no space before the CIK.
+    return f"{'8-K':<12}{company:<62}{cik:<12}{'20261013':<12}edgar/data/{cik}/0000000007-26-000001.txt"
+
+
+@pytest.mark.parametrize(
+    ("listed", "company"),
+    [
+        ("ACME CORP", "ACME CORP"),
+        ("ACME  CORP", "ACME CORP"),  # a double space inside the name
+        ("A" * 61, "A" * 61),  # one space left before the CIK
+        ("A" * 62, "A" * 62),  # runs straight into the CIK
+        ("A" * 57 + " 2026", "A" * 57 + " 2026"),  # digits at the end of a name that runs into the CIK
+    ],
+)
+def test_parse_form_index_reads_any_company_name(listed, company, caplog):
+    [ref] = parse_form_index(_form_index(_index_line(listed)))
+    assert ref.company == company
+    assert ref.cik == "0000000007"
+    assert ref.accession_no == "0000000007-26-000001"
+    assert ref.index_url.endswith("/data/7/000000000726000001/0000000007-26-000001-index.htm")
+    assert "can't read" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "8-K         ACME CORP",
+        "8-K         ACME CORP      7           20261013    edgar/data/7/no-accession.txt",
+        "8-K         ACME CORP      8           20261013    edgar/data/7/0000000007-26-000001.txt",
+        "8-K         7              20261013    edgar/data/7/0000000007-26-000001.txt",
+    ],
+)
+def test_parse_form_index_warns_about_an_unreadable_8k(line, caplog):
+    good = _index_line("ACME CORP", cik="9").replace("0000000007", "0000000009")
+    refs = parse_form_index(_form_index(line, good))
+    assert [r.cik for r in refs] == ["0000000009"]
+    assert "can't read" in caplog.text
+    assert line in caplog.text
+
+
+def test_parse_form_index_ignores_other_forms_quietly(caplog):
+    assert parse_form_index(_form_index("10-Q        Other Co", "8-K/A       Sample Holdings")) == []
+    assert caplog.text == ""
+
+
 def test_parse_form_index_dedupes_co_registrants():
     rule = "-" * 80
     lines = [
