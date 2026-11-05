@@ -124,9 +124,15 @@ def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float)
     )
 
 
+# How many filings in a row can fail with an outage error before a batch stops sending more. Enough that one
+# slow filing or a brief blip doesn't end the batch, since the unsent filings only wait for the next pass.
+OUTAGE_STOP_AFTER = 3
+
+
 def score_many(
     client: SystemOneClient, rows: Iterable[Any], model: str, price_per_m: float, workers: int = 8,
     on_failure: Callable[[Any, Exception], None] | None = None,
+    on_stop: Callable[[int], None] | None = None,
 ) -> Iterator[ScoreRow]:
     """Score in parallel, yielding each result as soon as it finishes.
 
@@ -136,6 +142,11 @@ def score_many(
     failure isn't about the filing: an outage would otherwise print one traceback per filing, so reporting
     those is up to the caller. `on_failure(row, exc)`, if given, is called for each failure from the
     caller's thread (not a worker), so it can write to the caller's SQLite connection.
+
+    After OUTAGE_STOP_AFTER outage failures in a row nothing more is sent: each further filing would spend its
+    whole retry budget learning the same thing. Calls in flight finish as usual, and any other answer from Jev
+    picks the batch back up. If filings are left unsent when those finish, `on_stop(count)` is called with
+    how many, from the caller's thread.
     """
 
     def safe(row: Any) -> ScoreRow | Exception:
@@ -149,8 +160,11 @@ def score_many(
     queue = iter(rows)
     pending: dict[Future[ScoreRow | Exception], Any] = {}
     pool = ThreadPoolExecutor(max_workers=workers)
+    outages_in_a_row = 0
 
     def top_up() -> None:
+        if outages_in_a_row >= OUTAGE_STOP_AFTER:
+            return
         for row in islice(queue, workers - len(pending)):
             pending[pool.submit(safe, row)] = row
 
@@ -161,12 +175,16 @@ def score_many(
             for future in done:
                 row = pending.pop(future)
                 result = future.result()
+                outages_in_a_row = outages_in_a_row + 1 if isinstance(result, Exception) and is_outage(result) else 0
                 top_up()  # first: the worker shouldn't sit idle while the caller stores this result
                 if isinstance(result, Exception):
                     if on_failure is not None:
                         on_failure(row, result)
                     continue
                 yield result
+        unsent = sum(1 for _ in queue)
+        if unsent and on_stop is not None:
+            on_stop(unsent)
     finally:
         # If the caller stops early (Ctrl-C, job timeout, an exception while storing), the filings not
         # yet sent stay unsent rather than being waited for and paid for.

@@ -14,7 +14,16 @@ from typesafe_sdk import (
 )
 
 from tape import db
-from tape.score import EVENTS, MATERIALITY_LEVELS, QUESTIONS, is_outage, score_many, score_one, state_for
+from tape.score import (
+    EVENTS,
+    MATERIALITY_LEVELS,
+    OUTAGE_STOP_AFTER,
+    QUESTIONS,
+    is_outage,
+    score_many,
+    score_one,
+    state_for,
+)
 from tests.conftest import make_filing
 from tests.fakes import FakeJev
 
@@ -146,13 +155,76 @@ def test_score_many_stops_sending_when_the_caller_stops(conn):
     assert [state["text"] for state, _, _ in jev.calls] == ["first", "second"]
 
 
+def _plain_rows(count):
+    return [{"accession_no": str(n), "company": "Acme", "form": "8-K", "items": "", "clean_text": "fine"}
+            for n in range(1, count + 1)]
+
+
+class Scripted(FakeJev):
+    """Answers each call with the next error in `script` (None means a normal answer), repeating it."""
+
+    def __init__(self, script):
+        super().__init__()
+        self.script = script
+
+    def system_one(self, state, questions, *, model=None):
+        self.error = self.script[len(self.calls) % len(self.script)]
+        return super().system_one(state, questions, model=model)
+
+
+OUTAGE, REJECTED = TypeSafeAPIError(503, None, {}), TypeSafeAPIError(400, None, {})
+
+
+def _run_batch(jev, count, workers):
+    failures, stops = [], []
+    out = list(score_many(jev, _plain_rows(count), "m", 0.042, workers=workers,
+                          on_failure=lambda row, exc: failures.append(exc), on_stop=stops.append))
+    return out, failures, stops
+
+
+def test_score_many_stops_sending_during_an_outage():
+    jev = FakeJev(error=OUTAGE)
+    out, failures, stops = _run_batch(jev, 40, workers=4)
+    # Four in flight at the start, and one more after each of the first two failures.
+    assert len(jev.calls) == 6
+    assert out == [] and len(failures) == 6
+    assert stops == [34]
+
+
+def test_score_many_stops_at_the_limit_with_a_single_worker():
+    jev = FakeJev(error=OUTAGE)
+    _, failures, stops = _run_batch(jev, 5, workers=1)
+    assert len(jev.calls) == len(failures) == OUTAGE_STOP_AFTER
+    assert stops == [2]
+
+
+def test_score_many_does_not_report_a_stop_with_nothing_left_to_send():
+    _, _, stops = _run_batch(FakeJev(error=OUTAGE), OUTAGE_STOP_AFTER, workers=1)
+    assert stops == []
+
+
+@pytest.mark.parametrize("between", [None, REJECTED], ids=["success", "rejected"])
+def test_score_many_keeps_going_when_jev_answers_between_outage_errors(between):
+    jev = Scripted([OUTAGE] * (OUTAGE_STOP_AFTER - 1) + [between])
+    out, failures, stops = _run_batch(jev, 30, workers=1)
+    assert len(jev.calls) == 30 and stops == []
+    assert len(out) + len(failures) == 30
+
+
+def test_score_many_sends_everything_jev_rejects():
+    jev = FakeJev(error=REJECTED)
+    _, failures, stops = _run_batch(jev, 20, workers=2)
+    assert len(jev.calls) == len(failures) == 20
+    assert stops == []
+
+
 def test_score_many_only_takes_filings_it_has_a_worker_for():
     taken = []
 
     def rows():
-        for n in range(1, 51):
-            taken.append(n)
-            yield {"accession_no": str(n), "company": "Acme", "form": "8-K", "items": "", "clean_text": "fine"}
+        for row in _plain_rows(50):
+            taken.append(row)
+            yield row
 
     results = score_many(FakeJev(), rows(), "m", 0.042, workers=2)
     next(results)
@@ -162,8 +234,7 @@ def test_score_many_only_takes_filings_it_has_a_worker_for():
 
 
 def test_score_many_scores_a_whole_batch_larger_than_its_workers():
-    rows = [{"accession_no": str(n), "company": "Acme", "form": "8-K", "items": "", "clean_text": "fine"}
-            for n in range(1, 21)]
+    rows = _plain_rows(20)
     out = list(score_many(FakeJev(), rows, "m", 0.042, workers=3))
     assert sorted(s.accession_no for s in out) == sorted(r["accession_no"] for r in rows)
 
