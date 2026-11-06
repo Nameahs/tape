@@ -84,7 +84,9 @@ def test_counts_filings_scoring_gave_up_on(conn):
 
     s = collect(conn, days=2, today=TODAY)
     assert s.given_up == 1
-    assert format_stats(s).splitlines()[-1].startswith("Gave up scoring 1 filing(s) after 3 failed attempts")
+    line = format_stats(s).splitlines()[-1]
+    assert line.startswith("Gave up scoring 1 filing(s) after 3 failed attempts")
+    assert line.endswith("tape retry --score retries them)")
 
 
 def test_format_stats_omits_given_up_line_when_there_are_none(conn):
@@ -100,6 +102,7 @@ def test_counts_filings_fetching_gave_up_on(conn):
     assert (s.given_up, s.fetch_given_up) == (0, 1)
     out = format_stats(s)
     assert out.splitlines()[-1].startswith("Gave up fetching 1 filing(s) after 3 failed attempts")
+    assert out.splitlines()[-1].endswith("tape retry --fetch retries them)")
     assert "Gave up scoring" not in out
 
 
