@@ -21,7 +21,7 @@ WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) < julianday(
 
 RUNS_SQL = """
 SELECT COUNT(*) AS n, COALESCE(SUM(blocked), 0) AS blocked, COALESCE(SUM(feed_gap), 0) AS feed_gaps,
-    COALESCE(SUM(missing_days), 0) AS missing_days
+    COALESCE(SUM(missing_days), 0) AS missing_days, COALESCE(SUM(outage), 0) AS outages
 FROM runs
 WHERE julianday(started_at) >= julianday(?) AND julianday(started_at) < julianday(?)
 """
@@ -53,6 +53,8 @@ class Stats:
     feed_gap_runs: int = 0
     # Weekdays those runs found no daily index for, summed per run: overlapping backfills count a day twice.
     missing_index_days: int = 0
+    # Of those, how many EDGAR failed to serve filings to; a later pass or backfill fetches them.
+    outage_runs: int = 0
 
 
 def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) -> Stats:
@@ -94,7 +96,7 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None) 
     return Stats(days=[buckets[k] for k in sorted(buckets)], spend_usd=float(spend["cost"]), calls=int(spend["n"]),
                  given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)),
                  runs=int(runs["n"]), blocked_runs=int(runs["blocked"]), feed_gap_runs=int(runs["feed_gaps"]),
-                 missing_index_days=int(runs["missing_days"]))
+                 missing_index_days=int(runs["missing_days"]), outage_runs=int(runs["outages"]))
 
 
 def format_stats(s: Stats) -> str:
@@ -111,6 +113,8 @@ def format_stats(s: Stats) -> str:
     lines.append(f"Jev spend in window: ${s.spend_usd:.2f} over {s.calls:,} calls")
     if s.blocked_runs:
         lines.append(f"EDGAR rate-limited {s.blocked_runs:,} of {s.runs:,} runs in window")
+    if s.outage_runs:
+        lines.append(f"EDGAR failed to serve filings to {s.outage_runs:,} of {s.runs:,} runs in window")
     if s.feed_gap_runs:
         lines.append(
             f"Feed may have dropped filings before {s.feed_gap_runs:,} of {s.runs:,} runs in window "

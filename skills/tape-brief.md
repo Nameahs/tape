@@ -14,6 +14,8 @@ filings it routed `now`. Do not re-score or second-guess the routing.
    your reply but keep going. If the summary ends in `blocked`, EDGAR is rate-limiting this
    host: new filings will be picked up on a later run once the block lifts (usually about ten
    minutes). Say so in one line and carry on; filings already stored were still scored.
+   If the summary includes `outage`, EDGAR failed to serve some filings; a later run fetches them,
+   and filings already stored were still scored. Say so in one line and carry on.
    If the summary includes `gap`, some older filings may have been missed; the morning backfill
    picks them up. Say so in one line and carry on.
    If `tape run` exits with status 2 and prints a line starting `error:`, a setting is missing or

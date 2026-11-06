@@ -86,7 +86,7 @@ def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
             db.finish_run(conn, run_id, discovered=stats.discovered, fetched=stats.fetched,
                           fetch_errors=stats.fetch_errors, scored=stats.scored, routes=stats.routes,
                           cost_usd=stats.cost_usd, blocked=stats.blocked, feed_gap=stats.feed_gap,
-                          missing_days=stats.missing_days, error=error)
+                          missing_days=stats.missing_days, outage=stats.outage, error=error)
         except Exception:
             # Bookkeeping must never mask the pass's own result or exception.
             log.exception("could not record run %s", run_id)

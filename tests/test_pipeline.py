@@ -311,7 +311,8 @@ def test_outage_on_filing_pages_still_scores_stored_filings_and_skips_the_ticker
     stats = run_pass(conn, edgar, FakeJev(), Settings())
 
     assert stats.outage and stats.scored == 1 and not tickers.called
-    assert conn.execute("SELECT error FROM runs").fetchone()[0] is None
+    error, outage = conn.execute("SELECT error, outage FROM runs").fetchone()
+    assert error is None and outage == 1
 
 
 @respx.mock
