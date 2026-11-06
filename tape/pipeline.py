@@ -15,6 +15,7 @@ import httpx
 from tape import db
 from tape.config import Settings
 from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FeedPage, FilingRef
+from tape.edgar import is_outage as is_edgar_outage
 from tape.route import route
 from tape.score import SystemOneClient, is_outage, score_many
 
@@ -27,6 +28,11 @@ TICKER_BACKFILL_DAYS = 7
 # How long before a daily index's date a filing it lists can have been accepted: an 8-K accepted on
 # Friday evening is in the next business day's index, which is Tuesday after a Monday holiday.
 INDEX_LAG_DAYS = 4
+
+# How many filings in a row can fail with an EDGAR outage error before ingest stops for this pass. Each one
+# has already waited out Edgar.get's backoff, so going on would only stretch the pass past the next one.
+# More than one so that a single filing EDGAR always answers with a 5xx can't hold back the filings behind it.
+FETCH_OUTAGE_STOP_AFTER = 3
 
 
 @dataclass
@@ -43,6 +49,8 @@ class PassStats:
     feed_gap: bool = False
     # Weekdays a backfill found no daily index for: a market holiday, or filings it could not read.
     missing_days: int = 0
+    # EDGAR failed to serve some filings for reasons of its own, so they were left for a later pass.
+    outage: bool = False
 
     def summary(self) -> str:
         r = self.routes
@@ -52,6 +60,8 @@ class PassStats:
         )
         if self.missing_days:
             text += f" missing_days={self.missing_days}"
+        if self.outage:
+            text += " outage"
         if self.feed_gap:
             text += " gap"
         return text + " blocked" if self.blocked else text
@@ -83,11 +93,11 @@ def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
 
 
 def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], settings: Settings,
-           stats: PassStats) -> EdgarBlockedError | None:
+           stats: PassStats) -> httpx.HTTPError | None:
     """Fetch and store the new filings in `refs`.
 
-    Returns the EdgarBlockedError that cut the pass short, if EDGAR blocked us; the filings not
-    yet fetched are left for a later pass.
+    Returns the error that cut the pass short, if EDGAR blocked us or looks to be down; the filings
+    not yet fetched are left for a later pass.
     """
     refs = list(refs)
     stats.discovered += len(refs)
@@ -95,6 +105,7 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
     # Filings EDGAR has failed to give us text for MAX_FETCH_ATTEMPTS times are skipped too: the feed keeps
     # them for hours, and refetching every pass only spends fair-access budget and floods the log.
     skip = db.known_accessions(conn, accessions) | {r["accession_no"] for r in db.fetch_given_up(conn, accessions)}
+    outages_in_a_row = 0
     for ref in refs:
         if ref.accession_no in skip:
             continue
@@ -110,6 +121,17 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
             return e
         except Exception as e:
             stats.fetch_errors += 1
+            if is_edgar_outage(e):
+                # Not this filing's fault, so it must not count towards fetch_given_up: a long enough
+                # outage would drop every filing on the feed for good.
+                stats.outage = True
+                outages_in_a_row += 1
+                log.warning("EDGAR failed to serve %s; leaving it for a later pass: %s", ref.accession_no, e)
+                if outages_in_a_row >= FETCH_OUTAGE_STOP_AFTER:
+                    log.warning("EDGAR looks to be down; leaving the remaining filings for a later pass")
+                    return e
+                continue
+            outages_in_a_row = 0
             with db.transaction(conn):
                 attempts = db.record_fetch_failure(conn, ref.accession_no, f"{type(e).__name__}: {e}"[:500])
             if isinstance(e, EmptyFilingError):
@@ -119,6 +141,7 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
             if attempts >= db.MAX_FETCH_ATTEMPTS:
                 log.warning("giving up on fetching %s after %d failed attempts", ref.accession_no, attempts)
             continue
+        outages_in_a_row = 0
         with db.transaction(conn):
             db.upsert_filing(conn, filing)
             db.clear_fetch_failure(conn, ref.accession_no)
@@ -201,6 +224,7 @@ def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime |
 def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings) -> PassStats:
     with recorded(conn, "pass") as stats:
         feed_error: httpx.HTTPError | None = None
+        stopped: httpx.HTTPError | None = None
         try:
             page = edgar.latest_8k()
         except EdgarBlockedError:
@@ -216,8 +240,8 @@ def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
                 stats.feed_gap = True
                 log.warning("none of the %d filings on a full feed are stored; older filings may have been "
                             "missed until the next tape backfill", len(page.refs))
-            ingest(conn, edgar, page.refs, settings, stats)
-        if not stats.blocked and feed_error is None:
+            stopped = ingest(conn, edgar, page.refs, settings, stats)
+        if not stats.blocked and feed_error is None and stopped is None:
             # The ticker map is another EDGAR download; asking for it now would only prolong the block
             # or wait out the same retries the feed just did.
             fill_missing_tickers(conn, edgar)
@@ -247,14 +271,14 @@ def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
                 # holiday's warning is cheap; a real hole in the backfill would otherwise pass unnoticed.
                 stats.missing_days += 1
                 log.warning("no daily index for %s; its filings were not read unless it was a market holiday", day)
-            blocked = ingest(conn, edgar, refs or [], settings, stats)
+            stopped = ingest(conn, edgar, refs or [], settings, stats)
             # Score as we go so a long backfill can be interrupted without losing work.
             score_and_route(conn, jev, settings, stats)
             log.info("%s %s", day, stats.summary())
-            if blocked:
-                # Moving on to the next day would only extend the block, and finishing quietly would
-                # report a backfill that skipped filings as a success.
-                raise blocked
+            if stopped:
+                # Moving on to the next day would only extend a block or wait out the same outage, and
+                # finishing quietly would report a backfill that skipped filings as a success.
+                raise stopped
         # Known filings are skipped above, so this is the only way a rerun repairs a stretch fetched while
         # the ticker map was down. The pass's own fill only looks back TICKER_BACKFILL_DAYS. A block returns
         # before this: the map is another EDGAR download.

@@ -238,6 +238,103 @@ def test_filings_seen_during_a_block_are_fetched_on_the_next_pass(conn):
     assert (again.fetched, again.scored, again.blocked) == (1, 1, False)
 
 
+@pytest.fixture
+def no_backoff(monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda _: None)
+
+
+@respx.mock
+@pytest.mark.parametrize("failure", [
+    {"return_value": httpx.Response(503)},
+    {"return_value": httpx.Response(429)},
+    {"side_effect": httpx.ReadTimeout("slow")},
+], ids=["503", "429", "timeout"])
+def test_filings_seen_during_an_outage_are_fetched_after_it(conn, no_backoff, failure):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    index = respx.get(INDEX)
+    edgar, jev, settings = Edgar("ua", per_second=1000), FakeJev(), Settings()
+
+    index.mock(**failure)
+    for _ in range(db.MAX_FETCH_ATTEMPTS + 1):
+        stats = run_pass(conn, edgar, jev, settings)
+        assert (stats.fetched, stats.fetch_errors, stats.outage) == (0, 1, True)
+        assert stats.summary().endswith(" outage")
+    assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
+
+    index.mock(return_value=httpx.Response(200, text=(FIX / "index.htm").read_text()))
+    again = run_pass(conn, edgar, jev, settings)
+    assert (again.fetched, again.scored, again.outage) == (1, 1, False)
+
+
+@respx.mock
+def test_ingest_stops_after_three_outage_failures_in_a_row(conn, no_backoff):
+    refs = _refs(4)
+    routes = [respx.get(ref.index_url).respond(503) for ref in refs]
+    stats = PassStats()
+
+    stopped = pipeline.ingest(conn, Edgar("ua", per_second=1000), refs, Settings(), stats)
+
+    assert isinstance(stopped, httpx.HTTPStatusError)
+    assert stats.fetch_errors == pipeline.FETCH_OUTAGE_STOP_AFTER == 3
+    assert routes[2].called and not routes[3].called
+
+
+@respx.mock
+def test_one_filing_edgar_cannot_serve_does_not_hold_back_the_rest(conn, no_backoff):
+    # A lone 5xx may be about that filing's URL. The feed lists newest first, so stopping at once would
+    # starve the older filings behind it until it scrolled off.
+    bad, missing = _refs(2)
+    respx.get(bad.index_url).respond(500)
+    respx.get(missing.index_url).respond(404)
+    stats = PassStats()
+
+    stopped = pipeline.ingest(conn, Edgar("ua", per_second=1000), [bad, missing], Settings(), stats)
+
+    assert stopped is None and stats.outage and stats.fetch_errors == 2
+    # The 404 is about the filing, so it still counts towards giving up.
+    assert [r["accession_no"] for r in conn.execute("SELECT accession_no FROM fetch_failures")] == [
+        missing.accession_no]
+
+
+@respx.mock
+def test_outage_on_filing_pages_still_scores_stored_filings_and_skips_the_ticker_fill(conn, no_backoff, monkeypatch):
+    with db.transaction(conn):
+        db.upsert_filing(conn, make_filing(1))
+    refs = _refs(3)
+    for ref in refs:
+        respx.get(ref.index_url).respond(503)
+    tickers = respx.get(TICKERS_URL).respond(200, json={})
+    edgar = Edgar("ua", per_second=1000)
+    monkeypatch.setattr(edgar, "latest_8k", lambda: FeedPage(refs, False))
+
+    stats = run_pass(conn, edgar, FakeJev(), Settings())
+
+    assert stats.outage and stats.scored == 1 and not tickers.called
+    assert conn.execute("SELECT error FROM runs").fetchone()[0] is None
+
+
+@respx.mock
+def test_backfill_stopped_by_an_outage_scores_what_it_has_then_fails(conn, no_backoff):
+    idx = "https://www.sec.gov/Archives/edgar/daily-index/2026/QTR4/form.{}.idx"
+    refs = _refs(3)
+    lines = [f"8-K  Blocked Co  9  20261009  edgar/data/9/{r.accession_no}.txt" for r in refs]
+    respx.get(idx.format("20261009")).respond(200, text="rule\n---\n" + "\n".join(lines))
+    for ref in refs:
+        folder = ref.accession_no.replace("-", "")
+        respx.get(f"https://www.sec.gov/Archives/edgar/data/9/{folder}/{ref.accession_no}-index.htm").respond(503)
+    next_day = respx.get(idx.format("20261012"))
+    with db.transaction(conn):
+        db.upsert_filing(conn, make_filing(1))
+
+    with pytest.raises(httpx.HTTPStatusError):
+        backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=4, end=date(2026, 10, 13))
+
+    assert not next_day.called
+    assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM scores").fetchone()[0] == 1
+
+
 def _store_recent_without_ticker(conn):
     accepted = datetime.now(UTC).replace(microsecond=0).isoformat()
     with db.transaction(conn):
