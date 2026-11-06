@@ -64,7 +64,7 @@ next morning's window retries the day, and once a day has aged out of it, rerun 
 
 | Status | Meaning |
 | --- | --- |
-| 0 | Pass finished. `blocked` at the end of the summary means EDGAR blocked part of it; the rest was scored. `gap` means filings may have scrolled off the feed before this pass. `missing_days=N` means a backfill found no daily index for N weekdays. |
+| 0 | Pass finished. `blocked` at the end of the summary means EDGAR blocked part of it; the rest was scored. `outage` means EDGAR failed to serve some filings (timeouts or 5xx); they stay queued for a later pass and the rest was scored. `gap` means filings may have scrolled off the feed before this pass. `missing_days=N` means a backfill found no daily index for N weekdays. |
 | 2 | Bad configuration or command line. One line on stderr starting `error:` (or argparse's usage message) says what to fix; rerunning won't help until it's fixed. |
 | 75 | EDGAR blocked the host or could not be reached. One line on stderr says which; try again later (a block usually lifts in about 10 minutes). A `tape run` whose feed failed has still scored the filings it had stored. The run is still recorded in `tape stats`. |
 | other | A real failure. Rerun with `-v` for the traceback. |
@@ -81,7 +81,8 @@ tape evaluate --days 140   # 90 business days is about 130 calendar days
 tape dashboard
 ```
 
-If the backfill exits with status 75, EDGAR blocked or dropped it partway. Wait about 10 minutes
+If the backfill exits with status 75, EDGAR blocked or dropped it partway. A summary ending in `outage`
+with status 0 means a few filings were skipped without stopping it. Either way, wait about 10 minutes
 and run the same command again: filings already stored are not fetched or scored twice.
 
 Then read `out/eval.json` and tune thresholds with the `TAPE_*` variables. Apply new thresholds

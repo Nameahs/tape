@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from typing import TypeGuard
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
@@ -72,6 +73,16 @@ def is_block_page(resp: httpx.Response) -> bool:
     except (UnicodeDecodeError, httpx.ResponseNotRead):
         return False
     return any(marker in body for marker in BLOCK_MARKERS)
+
+
+def is_outage(exc: Exception) -> TypeGuard[httpx.HTTPError]:
+    """Whether a failed request is about EDGAR rather than the URL that happened to hit it: a timeout, a
+    dropped connection, or a status that still means "slow down" or "try later" after Edgar.get's retries.
+    A block is reported separately as EdgarBlockedError, and a 404 is about the filing.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in RETRY_STATUSES
+    return isinstance(exc, httpx.TransportError)
 
 
 class EmptyFilingError(ValueError):

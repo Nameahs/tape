@@ -118,6 +118,21 @@ def test_format_stats_omits_blocked_line_when_nothing_was_blocked(conn):
     assert "rate-limited" not in format_stats(collect(conn, days=1, today=TODAY))
 
 
+def test_counts_runs_edgar_failed_to_serve_filings_to(conn):
+    for started_at, outage in [("2026-10-16T14:00:00Z", True), ("2026-10-16T14:05:00Z", False),
+                               ("2026-10-01T14:00:00Z", True)]:
+        db.finish_run(conn, db.start_run(conn, "pass", started_at=started_at), outage=outage)
+
+    s = collect(conn, days=2, today=TODAY)
+    assert (s.runs, s.outage_runs) == (2, 1)
+    assert "EDGAR failed to serve filings to 1 of 2 runs in window" in format_stats(s).splitlines()
+
+
+def test_format_stats_omits_outage_line_without_outages(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z"))
+    assert "failed to serve" not in format_stats(collect(conn, days=1, today=TODAY))
+
+
 def test_spend_query_seeks_on_the_scored_at_index(conn):
     window = ("2026-10-01T00:00:00+00:00", "2026-10-08T00:00:00+00:00")
     plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + SPEND_SQL, window))
