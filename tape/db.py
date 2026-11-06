@@ -92,7 +92,7 @@ MIGRATIONS: list[str] = [
     """,
     # 3: filings Jev failed to score. A transient error clears on the next pass; a filing Jev rejects every
     # time would otherwise be resent on every pass forever. After MAX_SCORE_ATTEMPTS, unscored() stops
-    # offering it until the row is cleared (see retry_given_up).
+    # offering it until `tape retry --score` clears the row.
     """
     CREATE TABLE score_failures (
         accession_no    TEXT PRIMARY KEY REFERENCES filings(accession_no) ON DELETE CASCADE,
