@@ -1,8 +1,10 @@
 import sqlite3
 
+import httpx
 import pytest
 
 from tape import db
+from tape.edgar import RETRY_STATUSES
 from tests.conftest import make_filing, make_score
 
 
@@ -414,3 +416,44 @@ def test_set_ticker_does_not_overwrite_an_existing_ticker(conn):
     db.set_ticker(conn, "0000000001-26-000002", "NEW")
     tickers = dict(conn.execute("SELECT accession_no, ticker FROM filings").fetchall())
     assert tickers == {"0000000001-26-000001": "EXMP", "0000000001-26-000002": "OLD"}
+
+
+def _httpx_error_names(cls=httpx.TransportError):
+    return [cls.__name__] + [name for sub in cls.__subclasses__() for name in _httpx_error_names(sub)]
+
+
+def _status_error(status):
+    resp = httpx.Response(status, request=httpx.Request("GET", "https://www.sec.gov/Archives/x-index.htm"))
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        return f"{type(e).__name__}: {e}"[:500]
+    raise AssertionError(status)
+
+
+def _v10_store(path, failures):
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA)
+    for script in db.MIGRATIONS[:10]:
+        old.executescript(script)
+    old.execute("PRAGMA user_version = 10")
+    old.executemany(
+        "INSERT INTO fetch_failures (accession_no, attempts, last_error, last_attempt_at) "
+        "VALUES (?, 3, ?, '2026-10-15T14:00:00Z')", failures)
+    old.commit()
+    old.close()
+
+
+def test_outage_fetch_failures_are_forgotten_on_upgrade(tmp_path):
+    outage = [f"{name}: EDGAR went away" for name in _httpx_error_names()]
+    outage += [_status_error(s) for s in sorted(RETRY_STATUSES)]
+    about_the_filing = [_status_error(404), _status_error(403), _status_error(400),
+                        "EmptyFilingError: no text found in 0000000001-26-000101",
+                        "ValueError: no 8-K document in the index page"]
+    path = tmp_path / "v10.db"
+    _v10_store(path, [(f"a{i}", e) for i, e in enumerate(outage + about_the_filing)])
+
+    conn = db.connect(path)
+
+    assert sorted(r["last_error"] for r in db.fetch_given_up(conn)) == sorted(about_the_filing)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)

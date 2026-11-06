@@ -143,6 +143,23 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE runs ADD COLUMN outage INTEGER NOT NULL DEFAULT 0;
     """,
+    # 11: before migration 10's change to ingest, an EDGAR outage counted against every filing it touched, so
+    # a long enough one left them in fetch_given_up for good and no pass or backfill would fetch them again.
+    # Forget the failures that were about EDGAR rather than the filing: transport errors (the names of
+    # httpx.TransportError and its subclasses) and the statuses edgar.RETRY_STATUSES retries. A 404, an empty
+    # filing or an unreadable page is still about the filing and stays given up.
+    """
+    DELETE FROM fetch_failures
+    WHERE substr(last_error, 1, instr(last_error, ':') - 1) IN (
+            'TransportError', 'TimeoutException', 'ConnectTimeout', 'ReadTimeout', 'WriteTimeout',
+            'PoolTimeout', 'NetworkError', 'ConnectError', 'ReadError', 'WriteError', 'CloseError',
+            'ProxyError', 'UnsupportedProtocol', 'ProtocolError', 'LocalProtocolError', 'RemoteProtocolError')
+        OR last_error LIKE 'HTTPStatusError: Client error ''429 %'
+        OR last_error LIKE 'HTTPStatusError: Server error ''500 %'
+        OR last_error LIKE 'HTTPStatusError: Server error ''502 %'
+        OR last_error LIKE 'HTTPStatusError: Server error ''503 %'
+        OR last_error LIKE 'HTTPStatusError: Server error ''504 %';
+    """,
 ]
 
 # Failed scoring attempts before a filing is left out of unscored(). Few enough that a filing Jev always

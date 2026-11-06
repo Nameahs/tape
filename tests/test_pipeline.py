@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 from datetime import UTC, date, datetime
 
@@ -705,3 +706,25 @@ def test_run_pass_warns_about_a_feed_gap_and_still_ingests(conn, caplog):
     assert stats.feed_gap and stats.fetched == 1
     assert "may have been missed" in caplog.text
     assert conn.execute("SELECT feed_gap FROM runs").fetchone()[0] == 1
+
+
+@respx.mock
+def test_backfill_fetches_a_filing_given_up_on_during_an_old_outage(tmp_path):
+    path = tmp_path / "v10.db"
+    old = sqlite3.connect(path)
+    old.executescript(db.SCHEMA)
+    for script in db.MIGRATIONS[:10]:
+        old.executescript(script)
+    old.execute("PRAGMA user_version = 10")
+    old.execute("INSERT INTO fetch_failures VALUES ('0000000001-26-000101', 3, 'ReadTimeout: timed out', "
+                "'2026-10-13T15:00:00Z')")
+    old.commit()
+    old.close()
+    respx.get(IDX.format("20261013")).respond(200, text=(FIX / "form.idx").read_text())
+    _mock_filing(respx)
+
+    conn = db.connect(path)
+    stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
+
+    assert (stats.fetched, stats.scored) == (1, 1)
+    assert db.fetch_given_up(conn) == []
