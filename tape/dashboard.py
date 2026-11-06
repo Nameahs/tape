@@ -18,6 +18,8 @@ ET = ZoneInfo("America/New_York")
 DAILY_DAYS = 14
 # Must keep the exact julianday(scored_at) expression so SQLite seeks on idx_scores_scored_jd.
 DAILY_SQL = "SELECT scored_at, cost_usd FROM scores WHERE julianday(scored_at) >= julianday(?)"
+SCORING_SQL = ("SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost FROM scores "
+               "WHERE julianday(scored_at) >= julianday(?)")
 
 CSS = """
 .viz-root { color-scheme: light; --surface-1:#fcfcfb; --surface-2:#f3f2ef; --rule:#e4e2dc;
@@ -181,10 +183,10 @@ def _daily_table(daily: list[tuple[date, int, float]]) -> str:
 def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=24)).isoformat()
-    day = conn.execute(
+    day = conn.execute(SCORING_SQL, (since,)).fetchone()
+    briefs = conn.execute(
         """
-        SELECT COUNT(*) AS n, COALESCE(SUM(s.cost_usd), 0) AS cost,
-               SUM(CASE WHEN b.route = 'now' THEN 1 ELSE 0 END) AS briefs
+        SELECT SUM(CASE WHEN b.route = 'now' THEN 1 ELSE 0 END) AS briefs
         FROM filings f JOIN scores s USING (accession_no) LEFT JOIN briefs b USING (accession_no)
         WHERE julianday(f.accepted_at) >= julianday(?)
         """,
@@ -193,7 +195,7 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
 
     tiles = [
         _tile("Filings scored, 24h", f"{day['n']:,}"),
-        _tile("Briefed now", f"{day['briefs'] or 0:,}"),
+        _tile("Briefed now", f"{briefs['briefs'] or 0:,}"),
         _tile("Jev cost, 24h", f"${day['cost']:.4f}"),
     ]
     eval_html = ('<p class="muted">No evaluation yet. Run <code>tape backfill</code> '
