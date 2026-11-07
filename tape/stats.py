@@ -42,7 +42,7 @@ class Stats:
     spend_usd: float  # Jev cost of every score made in the window, whatever day the filing is from
     calls: int
     # Filings scoring gave up on (any day, not just the window): they need a look, and stay unscored
-    # until their score_failures row is deleted.
+    # until `tape retry --score` clears them.
     given_up: int = 0
     # Filings ingest stopped fetching (no text, or EDGAR kept erroring); never stored, so not in `days`.
     fetch_given_up: int = 0
@@ -128,11 +128,11 @@ def format_stats(s: Stats) -> str:
     if s.given_up:
         lines.append(
             f"Gave up scoring {s.given_up:,} filing(s) after {db.MAX_SCORE_ATTEMPTS} failed attempts "
-            "(listed in score_failures; delete a row to retry it)"
+            "(tape retry lists them; tape retry --score retries them)"
         )
     if s.fetch_given_up:
         lines.append(
             f"Gave up fetching {s.fetch_given_up:,} filing(s) after {db.MAX_FETCH_ATTEMPTS} failed attempts "
-            "(listed in fetch_failures; delete a row to retry it)"
+            "(tape retry lists them; tape retry --fetch retries them)"
         )
     return "\n".join(lines)

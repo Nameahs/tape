@@ -92,7 +92,7 @@ MIGRATIONS: list[str] = [
     """,
     # 3: filings Jev failed to score. A transient error clears on the next pass; a filing Jev rejects every
     # time would otherwise be resent on every pass forever. After MAX_SCORE_ATTEMPTS, unscored() stops
-    # offering it until the row is cleared by hand.
+    # offering it until `tape retry --score` clears the row.
     """
     CREATE TABLE score_failures (
         accession_no    TEXT PRIMARY KEY REFERENCES filings(accession_no) ON DELETE CASCADE,
@@ -393,7 +393,7 @@ def clear_score_failure(conn: sqlite3.Connection, accession_no: str) -> None:
 
 
 def given_up(conn: sqlite3.Connection, max_attempts: int = MAX_SCORE_ATTEMPTS) -> list[sqlite3.Row]:
-    """Unscored filings that unscored() no longer offers. Delete a row from score_failures to retry one."""
+    """Unscored filings that unscored() no longer offers. retry_given_up() puts them back in the queue."""
     return conn.execute(
         """
         SELECT sf.* FROM score_failures sf LEFT JOIN scores s USING (accession_no)
@@ -402,6 +402,25 @@ def given_up(conn: sqlite3.Connection, max_attempts: int = MAX_SCORE_ATTEMPTS) -
         """,
         (max_attempts,),
     ).fetchall()
+
+
+def retry_given_up(conn: sqlite3.Connection, accession_no: str | None = None,
+                   max_attempts: int = MAX_SCORE_ATTEMPTS) -> int:
+    """Forget the failures of filings scoring gave up on (only `accession_no`, if given), so the next pass
+    sends them to Jev again with a fresh set of attempts. Returns how many were cleared.
+
+    Rows below the limit are left alone: those filings are still being retried, and their count is the
+    only thing that stops a filing Jev always rejects from being sent forever.
+    """
+    only = "AND sf.accession_no = ?" if accession_no is not None else ""
+    return conn.execute(
+        f"""
+        DELETE FROM score_failures WHERE accession_no IN (
+            SELECT sf.accession_no FROM score_failures sf LEFT JOIN scores s USING (accession_no)
+            WHERE s.accession_no IS NULL AND sf.attempts >= ? {only})
+        """,
+        (max_attempts, *(() if accession_no is None else (accession_no,))),
+    ).rowcount
 
 
 def record_fetch_failure(conn: sqlite3.Connection, accession_no: str, error: str,
@@ -426,7 +445,7 @@ def clear_fetch_failure(conn: sqlite3.Connection, accession_no: str) -> None:
 def fetch_given_up(conn: sqlite3.Connection, accessions: list[str] | None = None,
                    max_attempts: int = MAX_FETCH_ATTEMPTS) -> list[sqlite3.Row]:
     """Filings ingest no longer fetches, oldest attempt first; with `accessions`, only those among them.
-    Filings stored since (fetched by hand, say) are left out. Delete a row from fetch_failures to retry one.
+    Filings stored since (fetched by hand, say) are left out. retry_fetch_given_up() lets ingest try again.
     """
     if accessions is not None and not accessions:
         return []
@@ -439,6 +458,22 @@ def fetch_given_up(conn: sqlite3.Connection, accessions: list[str] | None = None
         """,
         (max_attempts, *(accessions or ())),
     ).fetchall()
+
+
+def retry_fetch_given_up(conn: sqlite3.Connection, accession_no: str | None = None,
+                         max_attempts: int = MAX_FETCH_ATTEMPTS) -> int:
+    """Forget the failures of filings ingest gave up fetching (only `accession_no`, if given). The next
+    pass or backfill that sees them fetches them again. Returns how many were cleared.
+    """
+    only = "AND ff.accession_no = ?" if accession_no is not None else ""
+    return conn.execute(
+        f"""
+        DELETE FROM fetch_failures WHERE accession_no IN (
+            SELECT ff.accession_no FROM fetch_failures ff LEFT JOIN filings f USING (accession_no)
+            WHERE f.accession_no IS NULL AND ff.attempts >= ? {only})
+        """,
+        (max_attempts, *(() if accession_no is None else (accession_no,))),
+    ).rowcount
 
 
 def pending_briefs(conn: sqlite3.Connection, since_iso: str | None = None) -> list[sqlite3.Row]:
