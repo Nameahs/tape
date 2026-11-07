@@ -707,3 +707,85 @@ def test_reroute_dry_run_prints_moves_without_writing(tmp_path, monkeypatch, cap
     assert out[:2] == ["dry run, nothing written", "now -> digest: 1"]
     with closing(db.connect(path)) as conn:
         assert conn.execute("SELECT route FROM briefs WHERE accession_no = ?", (acc,)).fetchone()[0] == "now"
+
+
+def _given_up_store(path):
+    conn = db.connect(path)
+    stuck = make_filing(1)
+    db.upsert_filing(conn, stuck)
+    for _ in range(db.MAX_SCORE_ATTEMPTS):
+        db.record_score_failure(conn, stuck.accession_no, "KeyError: 'materiality'", at="2026-11-05T15:00:00Z")
+    gone = "0000000001-26-000099"
+    for _ in range(db.MAX_FETCH_ATTEMPTS):
+        db.record_fetch_failure(conn, gone, "HTTPStatusError: 404", at="2026-11-05T16:00:00Z")
+    conn.commit()
+    conn.close()
+    return stuck.accession_no, gone
+
+
+def _counts(path):
+    with closing(db.connect(path)) as conn:
+        return len(db.given_up(conn)), len(db.fetch_given_up(conn))
+
+
+def test_retry_lists_given_up_filings_without_clearing_them(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    stuck, gone = _given_up_store(path)
+
+    assert main(["retry"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        f"score  {stuck}  attempts=3  2026-11-05T15:00:00Z  KeyError: 'materiality'",
+        f"fetch  {gone}  attempts=3  2026-11-05T16:00:00Z  HTTPStatusError: 404",
+    ]
+    assert main(["retry", "--accession", gone]) == 0
+    assert capsys.readouterr().out.split()[:2] == ["fetch", gone]
+    assert _counts(path) == (1, 1)
+
+
+def test_retry_with_nothing_given_up(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    db.connect(path).close()
+    assert main(["retry"]) == 0
+    assert capsys.readouterr().out.strip() == "nothing given up"
+
+
+@pytest.mark.parametrize(("flags", "message", "left"), [
+    (["--score"], "cleared 1 to score;", (0, 1)),
+    (["--fetch"], "cleared 1 to fetch;", (1, 0)),
+    (["--score", "--fetch"], "cleared 1 to score, 1 to fetch;", (0, 0)),
+])
+def test_retry_clears_each_kind(flags, message, left, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _given_up_store(path)
+    assert main(["retry", *flags]) == 0
+    assert capsys.readouterr().out.startswith(message)
+    assert _counts(path) == left
+
+
+def test_retry_one_accession(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    stuck, gone = _given_up_store(path)
+    assert main(["retry", "--score", "--fetch", "--accession", gone]) == 0
+    assert capsys.readouterr().out.startswith("cleared 0 to score, 1 to fetch;")
+    assert _counts(path) == (1, 0)
+
+
+def test_retry_unknown_accession_is_an_error(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _given_up_store(path)
+    assert main(["retry", "--score", "--accession", "0000000000-00-000000"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("error: 0000000000-00-000000 is not a given-up filing")
+    assert _counts(path) == (1, 1)
+
+
+def test_retry_needs_an_existing_store(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    assert main(["retry", "--score"]) == 2
+    assert not path.exists()

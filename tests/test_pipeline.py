@@ -779,3 +779,40 @@ def test_backfill_fetches_a_filing_given_up_on_during_an_old_outage(tmp_path):
 
     assert (stats.fetched, stats.scored) == (1, 1)
     assert db.fetch_given_up(conn) == []
+
+
+def test_a_retried_filing_is_scored_by_the_next_pass(conn):
+    f = make_filing(1, clean_text="explode every time")
+    db.upsert_filing(conn, f)
+    conn.commit()
+    jev = FakeJev(fail_on={"explode"})
+    for _ in range(db.MAX_SCORE_ATTEMPTS):
+        score_and_route(conn, jev, Settings(), PassStats())
+    assert [r["accession_no"] for r in db.given_up(conn)] == [f.accession_no]
+
+    jev.fail_on = set()  # whatever made Jev reject it has been fixed
+    assert db.retry_given_up(conn) == 1
+    stats = PassStats()
+    score_and_route(conn, jev, Settings(), stats)
+
+    assert stats.scored == 1
+    assert conn.execute("SELECT COUNT(*) FROM score_failures").fetchone()[0] == 0
+
+
+@respx.mock
+def test_a_retried_fetch_is_fetched_by_the_next_pass(conn):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    index = respx.get(INDEX)
+    index.respond(200, text=_index_without_documents())
+    edgar, jev, settings = Edgar("ua", per_second=1000), FakeJev(), Settings()
+    for _ in range(db.MAX_FETCH_ATTEMPTS + 1):
+        run_pass(conn, edgar, jev, settings)
+    assert len(db.fetch_given_up(conn)) == 1
+
+    index.respond(200, text=(FIX / "index.htm").read_text())  # EDGAR has repaired the filing
+    assert db.retry_fetch_given_up(conn) == 1
+    stats = run_pass(conn, edgar, jev, settings)
+
+    assert (stats.fetched, stats.scored) == (1, 1)
+    assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0

@@ -457,3 +457,48 @@ def test_outage_fetch_failures_are_forgotten_on_upgrade(tmp_path):
 
     assert sorted(r["last_error"] for r in db.fetch_given_up(conn)) == sorted(about_the_filing)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+
+
+def _give_up_scoring(conn, f):
+    db.upsert_filing(conn, f)
+    for _ in range(db.MAX_SCORE_ATTEMPTS):
+        db.record_score_failure(conn, f.accession_no, "boom")
+
+
+def test_retry_given_up_clears_given_up_filings_only(conn):
+    a, b, trying = make_filing(1), make_filing(2), make_filing(3)
+    _give_up_scoring(conn, a)
+    _give_up_scoring(conn, b)
+    db.upsert_filing(conn, trying)
+    db.record_score_failure(conn, trying.accession_no, "boom")  # below the limit: still being retried
+
+    assert db.retry_given_up(conn) == 2
+    assert db.given_up(conn) == []
+    assert [r["accession_no"] for r in db.unscored(conn)] == [a.accession_no, b.accession_no, trying.accession_no]
+    assert [tuple(r) for r in conn.execute("SELECT accession_no, attempts FROM score_failures")] == [
+        (trying.accession_no, 1)]
+    assert db.retry_given_up(conn) == 0
+
+
+def test_retry_given_up_for_one_accession(conn):
+    a, b = make_filing(1), make_filing(2)
+    _give_up_scoring(conn, a)
+    _give_up_scoring(conn, b)
+
+    assert db.retry_given_up(conn, a.accession_no) == 1
+    assert [r["accession_no"] for r in db.given_up(conn)] == [b.accession_no]
+    assert db.retry_given_up(conn, "0000000000-00-000000") == 0
+
+
+def test_retry_fetch_given_up_clears_given_up_filings_only(conn):
+    gone, other, trying = "0000000001-26-000009", "0000000001-26-000010", "0000000001-26-000011"
+    for _ in range(db.MAX_FETCH_ATTEMPTS):
+        db.record_fetch_failure(conn, gone, "HTTPStatusError: 404")
+        db.record_fetch_failure(conn, other, "EmptyFilingError: no text")
+    db.record_fetch_failure(conn, trying, "EmptyFilingError: no text")
+
+    assert db.retry_fetch_given_up(conn, gone) == 1
+    assert [r["accession_no"] for r in db.fetch_given_up(conn)] == [other]
+    assert db.retry_fetch_given_up(conn) == 1
+    assert db.fetch_given_up(conn) == []
+    assert [r["accession_no"] for r in conn.execute("SELECT accession_no FROM fetch_failures")] == [trying]

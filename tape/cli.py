@@ -181,6 +181,38 @@ def cmd_stats(args, settings, conn) -> int:
     return 0
 
 
+def format_given_up(score_rows, fetch_rows) -> str:
+    if not score_rows and not fetch_rows:
+        return "nothing given up"
+    lines = []
+    for kind, rows in (("score", score_rows), ("fetch", fetch_rows)):
+        for r in rows:
+            lines.append(f"{kind}  {r['accession_no']}  attempts={r['attempts']}  {r['last_attempt_at']}  "
+                         f"{r['last_error']}")
+    return "\n".join(lines)
+
+
+def cmd_retry(args, settings, conn) -> int:
+    """List the filings scoring or fetching gave up on, or with --score/--fetch put them back in the queue.
+    Only the store changes: the next `tape run` (or backfill, for fetches) does the actual retrying.
+    """
+    if not (args.score or args.fetch):
+        score_rows = [r for r in db.given_up(conn) if args.accession in (None, r["accession_no"])]
+        fetch_rows = db.fetch_given_up(conn, None if args.accession is None else [args.accession])
+        print(format_given_up(score_rows, fetch_rows))
+        return 0
+    with db.transaction(conn):
+        scores = db.retry_given_up(conn, args.accession) if args.score else 0
+        fetches = db.retry_fetch_given_up(conn, args.accession) if args.fetch else 0
+    if args.accession is not None and not (scores or fetches):
+        # Most likely a typo; the agent reads stderr, so say so rather than report "cleared 0".
+        print(f"error: {args.accession} is not a given-up filing; nothing cleared", file=sys.stderr)
+        return 1
+    parts = [f"{scores} to score" if args.score else "", f"{fetches} to fetch" if args.fetch else ""]
+    print(f"cleared {', '.join(p for p in parts if p)}; the next pass retries them")
+    return 0
+
+
 def cmd_evaluate(args, settings, conn) -> int:
     from pathlib import Path
 
@@ -267,6 +299,11 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("stats", help="filings, scores, routes and Jev spend per day")
     st.add_argument("--days", type=_positive_int, default=7)
     st.set_defaults(fn=cmd_stats)
+    rt = sub.add_parser("retry", help="list filings Tape gave up on, or clear them to be retried")
+    rt.add_argument("--score", action="store_true", help="clear filings scoring gave up on")
+    rt.add_argument("--fetch", action="store_true", help="clear filings fetching gave up on")
+    rt.add_argument("--accession", help="only this accession number")
+    rt.set_defaults(fn=cmd_retry)
     e = sub.add_parser("evaluate", help="pull prices, compute abnormal returns, compare to baselines")
     e.add_argument("--skip-prices", action="store_true", help="use outcomes already stored")
     # Default lives in tape.evaluate; importing it here would load pandas for every command.
