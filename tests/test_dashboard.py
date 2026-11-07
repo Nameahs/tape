@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from tape import db
-from tape.dashboard import DAILY_SQL, _daily, _daily_chart, build, write
+from tape.dashboard import DAILY_SQL, SPEND_SQL, _daily, _daily_chart, build, write
 from tests.conftest import make_filing, make_score
 
 NOW = datetime(2026, 10, 13, 22, 0, tzinfo=UTC)
@@ -133,4 +133,45 @@ def test_daily_chart_empty_when_no_spend(conn):
 def test_daily_query_seeks_on_the_scored_at_index(conn):
     window = ("2026-10-01T00:00:00+00:00",)
     plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + DAILY_SQL, window))
+    assert "USING INDEX idx_scores_scored_jd" in plan
+
+
+def _tile_value(html, label):
+    start = html.index(f'<span class="muted">{label}</span><b>') + len(f'<span class="muted">{label}</span><b>')
+    return html[start:html.index("</b>", start)]
+
+
+def test_24h_tiles_count_backfill_spend_by_when_jev_was_called(conn):
+    old = make_filing(1, accepted_at="2020-03-02T09:00:00-05:00")
+    db.upsert_filing(conn, old)
+    db.upsert_score(conn, make_score(old.accession_no, cost_usd=1.25))
+    db.set_route(conn, old.accession_no, "now")
+    conn.execute("UPDATE scores SET scored_at = ?", ("2026-10-13T20:00:00Z",))
+
+    html = build(conn, None, NOW)
+
+    assert _tile_value(html, "Filings scored, 24h") == "1"
+    assert _tile_value(html, "Jev cost, 24h") == "$1.2500"
+    assert "<td>Tue Oct 13</td><td class=\"num\">1</td><td class=\"num\">$1.2500</td>" in html  # agrees with daily
+    assert _tile_value(html, "Briefed now") == "0"  # a 2020 filing isn't news
+
+
+def test_24h_tiles_leave_out_calls_outside_the_window(conn):
+    _score_at(conn, 1, "2026-10-12T21:59:00Z", 0.5)   # just over 24 hours before NOW
+    _score_at(conn, 2, "2026-10-13T22:30:00Z", 0.25)  # after NOW, e.g. a run still writing
+    _score_at(conn, 3, "2026-10-13T12:00:00Z", 0.003)
+    html = build(conn, None, NOW)
+    assert _tile_value(html, "Filings scored, 24h") == "1"
+    assert _tile_value(html, "Jev cost, 24h") == "$0.0030"
+
+
+def test_briefed_now_tile_counts_recent_filings_routed_now(conn):
+    _seed(conn)
+    db.set_route(conn, make_filing(2).accession_no, "now")  # accepted Oct 1, outside the window
+    assert _tile_value(build(conn, None, NOW), "Briefed now") == "1"
+
+
+def test_spend_query_seeks_on_the_scored_at_index(conn):
+    window = ("2026-10-12T22:00:00+00:00", "2026-10-13T22:00:00+00:00")
+    plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + SPEND_SQL, window))
     assert "USING INDEX idx_scores_scored_jd" in plan

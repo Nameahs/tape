@@ -18,6 +18,11 @@ ET = ZoneInfo("America/New_York")
 DAILY_DAYS = 14
 # Must keep the exact julianday(scored_at) expression so SQLite seeks on idx_scores_scored_jd.
 DAILY_SQL = "SELECT scored_at, cost_usd FROM scores WHERE julianday(scored_at) >= julianday(?)"
+# The 24h tiles count Jev calls by when they were made, so backfill spend shows up; same index rule as above.
+SPEND_SQL = """
+SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost FROM scores
+WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) <= julianday(?)
+"""
 
 CSS = """
 .viz-root { color-scheme: light; --surface-1:#fcfcfb; --surface-2:#f3f2ef; --rule:#e4e2dc;
@@ -181,20 +186,20 @@ def _daily_table(daily: list[tuple[date, int, float]]) -> str:
 def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=24)).isoformat()
-    day = conn.execute(
+    spend = conn.execute(SPEND_SQL, (since, now.isoformat())).fetchone()
+    # "Briefed now" is about what is news, so it stays keyed on when EDGAR accepted the filing.
+    briefs = conn.execute(
         """
-        SELECT COUNT(*) AS n, COALESCE(SUM(s.cost_usd), 0) AS cost,
-               SUM(CASE WHEN b.route = 'now' THEN 1 ELSE 0 END) AS briefs
-        FROM filings f JOIN scores s USING (accession_no) LEFT JOIN briefs b USING (accession_no)
-        WHERE julianday(f.accepted_at) >= julianday(?)
+        SELECT COUNT(*) FROM filings f JOIN briefs b USING (accession_no)
+        WHERE b.route = 'now' AND julianday(f.accepted_at) >= julianday(?)
         """,
         (since,),
-    ).fetchone()
+    ).fetchone()[0]
 
     tiles = [
-        _tile("Filings scored, 24h", f"{day['n']:,}"),
-        _tile("Briefed now", f"{day['briefs'] or 0:,}"),
-        _tile("Jev cost, 24h", f"${day['cost']:.4f}"),
+        _tile("Filings scored, 24h", f"{spend['n']:,}"),
+        _tile("Briefed now", f"{briefs:,}"),
+        _tile("Jev cost, 24h", f"${spend['cost']:.4f}"),
     ]
     eval_html = ('<p class="muted">No evaluation yet. Run <code>tape backfill</code> '
                  'then <code>tape evaluate</code>.</p>')
