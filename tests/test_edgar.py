@@ -15,6 +15,9 @@ from tape.edgar import (
     EdgarBlockedError,
     EmptyFilingError,
     FilingRef,
+    IndexPageError,
+    NotAnIndexPageError,
+    is_outage,
     parse_feed,
     parse_form_index,
     parse_index_page,
@@ -43,6 +46,44 @@ def test_parse_index_page():
     assert page.items == ["5.02", "9.01"]
     assert page.main_url == f"{FOLDER}/exmp-20261013.htm"
     assert page.exhibit_url == f"{FOLDER}/ex991.htm"
+
+
+MAINTENANCE_PAGE = "<html><body><h1>EDGAR is undergoing maintenance</h1><p>Please try again later.</p></body></html>"
+ACCEPTED_LINE = '<div class="infoHead">Accepted</div><div class="info">2026-10-13 16:31:02</div>'
+
+
+def _index_with_accepted(line):
+    html = (FIX / "index.htm").read_text()
+    assert ACCEPTED_LINE in html
+    return html.replace(ACCEPTED_LINE, line)
+
+
+@pytest.mark.parametrize("html", [MAINTENANCE_PAGE, "", (FIX / "index.htm").read_text()[:40]],
+                         ids=["maintenance", "empty", "truncated"])
+def test_parse_index_page_rejects_a_page_that_is_not_a_filing_index(html):
+    with pytest.raises(NotAnIndexPageError, match="not a filing index page"):
+        parse_index_page(html, INDEX)
+
+
+@pytest.mark.parametrize(("line", "message"), [
+    ("", "has no Accepted time"),
+    ('<div class="infoHead">Accepted</div><div class="info">soon</div>', "unreadable Accepted time: 'soon'"),
+], ids=["missing", "garbled"])
+def test_parse_index_page_names_a_missing_or_unreadable_accepted_time(line, message):
+    with pytest.raises(IndexPageError, match=message) as info:
+        parse_index_page(_index_with_accepted(line), INDEX)
+    assert not isinstance(info.value, NotAnIndexPageError)
+    assert INDEX in str(info.value)
+
+
+@pytest.mark.parametrize(("exc", "outage"), [
+    (NotAnIndexPageError("x"), True),
+    (IndexPageError("x"), False),
+    (EmptyFilingError("x"), False),
+    (httpx.ReadTimeout("slow"), True),
+])
+def test_is_outage_for_index_page_errors(exc, outage):
+    assert is_outage(exc) is outage
 
 
 def _mock_filing(router):
