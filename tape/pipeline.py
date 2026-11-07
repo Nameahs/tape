@@ -286,13 +286,36 @@ def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
     return stats
 
 
-def rescore_routes(conn: sqlite3.Connection, settings: Settings) -> Counter:
-    """Re-apply thresholds to stored scores (after tuning) without calling Jev again."""
-    counts: Counter = Counter()
-    for row in conn.execute("SELECT * FROM scores").fetchall():
-        s = db.ScoreRow(**{k: row[k] for k in row.keys() if k != "scored_at"})
+@dataclass
+class RerouteReport:
+    """What re-applying thresholds did, or would do: the route every scored filing ends up on, and the
+    filings whose route changed. A move from None is a scored filing that had no route yet.
+    """
+
+    totals: Counter = field(default_factory=Counter)
+    moves: Counter = field(default_factory=Counter)
+
+    @property
+    def changed(self) -> int:
+        return sum(self.moves.values())
+
+
+def rescore_routes(conn: sqlite3.Connection, settings: Settings, *, dry_run: bool = False) -> RerouteReport:
+    """Re-apply thresholds to stored scores (after tuning) without calling Jev again. With dry_run the
+    report is computed against the stored routes and nothing is written, so a cutoff can be previewed.
+    """
+    report = RerouteReport()
+    rows = conn.execute(
+        "SELECT s.*, b.route AS old_route FROM scores s LEFT JOIN briefs b USING (accession_no)"
+    ).fetchall()
+    for row in rows:
+        s = db.ScoreRow(**{k: row[k] for k in row.keys() if k not in ("scored_at", "old_route")})
         r = route(s, settings.thresholds)
-        db.set_route(conn, s.accession_no, r)
-        counts[r] += 1
-    conn.commit()
-    return counts
+        report.totals[r] += 1
+        if r != row["old_route"]:
+            report.moves[(row["old_route"], r)] += 1
+            if not dry_run:
+                db.set_route(conn, s.accession_no, r)
+    if not dry_run:
+        conn.commit()
+    return report

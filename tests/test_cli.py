@@ -10,7 +10,7 @@ import pytest
 import respx
 
 from tape import db
-from tape.cli import EXIT_TEMPFAIL, format_digest, main
+from tape.cli import EXIT_TEMPFAIL, format_digest, format_reroute, main
 from tape.edgar import FEED_URL, EdgarBlockedError
 from tape.evaluate import PRICE_LOOKBACK_DAYS
 from tape.notify import API
@@ -654,3 +654,42 @@ def test_run_creates_a_missing_store(tmp_path, monkeypatch):
     # Status doesn't matter here: the store has to exist for the run to be recorded either way.
     main(["run"])
     assert path.is_file()
+
+
+def test_format_reroute_lists_moves_then_totals():
+    from collections import Counter
+
+    from tape.pipeline import RerouteReport
+
+    report = RerouteReport(
+        totals=Counter(now=37, digest=412, log=8123),
+        moves=Counter({("digest", "now"): 12, (None, "log"): 3, ("now", "digest"): 12}),
+    )
+
+    assert format_reroute(report).splitlines() == [
+        "digest -> now: 12",
+        "now -> digest: 12",
+        "new -> log: 3",
+        "27 changed; routes now: now 37, digest 412, log 8123",
+    ]
+
+
+def test_format_reroute_says_when_nothing_moved():
+    from collections import Counter
+
+    from tape.pipeline import RerouteReport
+
+    out = format_reroute(RerouteReport(totals=Counter(log=4)))
+
+    assert out.splitlines() == ["no routes changed", "0 changed; routes now: log 4"]
+
+
+def test_reroute_prints_the_moves(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)  # materiality 4.4, routed 'now'
+    monkeypatch.setenv("TAPE_BRIEF_NOW", "4.5")
+
+    assert main(["reroute"]) == 0
+
+    assert capsys.readouterr().out.splitlines()[0] == "now -> digest: 1"

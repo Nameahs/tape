@@ -86,10 +86,26 @@ def cmd_backfill(args, settings, conn) -> int:
     return 0
 
 
+def format_reroute(report) -> str:
+    """One line per move ("digest -> now: 12"), most moved first, then the routes every scored filing is on."""
+    from tape.route import DIGEST, LOG, NOW
+
+    lines = [
+        f"{old or 'new'} -> {new}: {n}"
+        for (old, new), n in sorted(report.moves.items(), key=lambda kv: (-kv[1], kv[0][0] or "", kv[0][1]))
+    ]
+    if not lines:
+        lines.append("no routes changed")
+    order = [NOW, DIGEST, LOG]
+    totals = ", ".join(f"{r} {report.totals[r]}" for r in order if report.totals[r])
+    lines.append(f"{report.changed} changed; routes now: {totals or 'no scored filings'}")
+    return "\n".join(lines)
+
+
 def cmd_reroute(args, settings, conn) -> int:
     from tape.pipeline import rescore_routes
 
-    print(dict(rescore_routes(conn, settings)))
+    print(format_reroute(rescore_routes(conn, settings)))
     return 0
 
 
