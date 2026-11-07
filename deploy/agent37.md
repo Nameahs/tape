@@ -91,8 +91,9 @@ If the backfill exits with status 75, EDGAR blocked or dropped it partway. A sum
 with status 0 means a few filings were skipped without stopping it. Either way, wait about 10 minutes
 and run the same command again: filings already stored are not fetched or scored twice.
 
-Then read `out/eval.json` and tune thresholds with the `TAPE_*` variables. Apply new thresholds
-to stored scores with `tape reroute` instead of re-scoring.
+Then read `out/eval.json` and tune thresholds with the `TAPE_*` variables. Preview a change with
+`tape reroute --dry-run`, which prints how many filings each route would gain or lose (`digest -> now: 12`)
+without writing anything, then apply it to stored scores with `tape reroute` instead of re-scoring.
 
 ## Open item
 

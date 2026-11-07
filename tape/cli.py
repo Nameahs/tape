@@ -86,10 +86,29 @@ def cmd_backfill(args, settings, conn) -> int:
     return 0
 
 
+def format_reroute(report) -> str:
+    """One line per move ("digest -> now: 12"), most moved first, then the routes every scored filing is on."""
+    from tape.route import DIGEST, LOG, NOW
+
+    lines = [
+        f"{old or 'new'} -> {new}: {n}"
+        for (old, new), n in sorted(report.moves.items(), key=lambda kv: (-kv[1], kv[0][0] or "", kv[0][1]))
+    ]
+    if not lines:
+        lines.append("no routes changed")
+    order = [NOW, DIGEST, LOG]
+    totals = ", ".join(f"{r} {report.totals[r]}" for r in order if report.totals[r])
+    lines.append(f"{report.changed} changed; routes now: {totals or 'no scored filings'}")
+    return "\n".join(lines)
+
+
 def cmd_reroute(args, settings, conn) -> int:
     from tape.pipeline import rescore_routes
 
-    print(dict(rescore_routes(conn, settings)))
+    report = rescore_routes(conn, settings, dry_run=args.dry_run)
+    if args.dry_run:
+        print("dry run, nothing written")
+    print(format_reroute(report))
     return 0
 
 
@@ -261,7 +280,10 @@ def build_parser() -> argparse.ArgumentParser:
     b = sub.add_parser("backfill", help="ingest and score past business days")
     b.add_argument("--days", type=_positive_int, default=90)
     b.set_defaults(fn=cmd_backfill, busy_exit=1, creates_store=True)
-    sub.add_parser("reroute", help="re-apply thresholds to stored scores").set_defaults(fn=cmd_reroute)
+    rr = sub.add_parser("reroute", help="re-apply thresholds to stored scores")
+    rr.add_argument("--dry-run", action="store_true",
+                    help="show which filings would change route without writing anything")
+    rr.set_defaults(fn=cmd_reroute)
     pe = sub.add_parser("pending", help="recent filings waiting for a brief (JSON)")
     pe.add_argument("--max-age-hours", type=_positive_int, default=24,
                     help="skip filings EDGAR accepted longer ago than this (default 24)")

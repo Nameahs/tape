@@ -11,7 +11,7 @@ from tape import db, pipeline
 from tape.config import Settings, Thresholds
 from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError, FeedPage, FilingRef
 from tape.pipeline import PassStats, backfill, feed_gap, rescore_routes, run_pass, score_and_route, today_et
-from tests.conftest import make_filing
+from tests.conftest import make_filing, make_score
 from tests.fakes import FakeJev
 from tests.test_edgar import FIX, INDEX, _index_without_documents, _mock_filing
 
@@ -143,7 +143,58 @@ def test_reroute_uses_new_thresholds(conn):
     _mock_filing(respx)
     run_pass(conn, Edgar("ua", per_second=1000), FakeJev(), Settings())
     strict = Settings(thresholds=Thresholds(brief_now=4.9, brief_now_with_surprise=4.9, digest=4.0))
-    assert rescore_routes(conn, strict) == {"digest": 1}
+    report = rescore_routes(conn, strict)
+    assert report.totals == {"digest": 1}
+    assert report.moves == {("now", "digest"): 1}
+
+
+def _seed_routes(conn, scores_and_routes):
+    for n, (materiality, old) in enumerate(scores_and_routes, start=1):
+        f = make_filing(n)
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, materiality, surprise=0.0))
+        if old is not None:
+            db.set_route(conn, f.accession_no, old)
+    conn.commit()
+
+
+def _routes(conn):
+    return dict(conn.execute("SELECT accession_no, route FROM briefs").fetchall())
+
+
+def test_reroute_reports_moves_between_routes(conn):
+    # Default cutoffs: >= 4.0 now, >= 2.75 digest. Raising brief_now to 4.5 moves only the 4.2.
+    _seed_routes(conn, [(4.2, "now"), (4.6, "now"), (3.0, "digest"), (1.0, "log"), (4.7, None)])
+    tuned = Settings(thresholds=Thresholds(brief_now=4.5))
+
+    report = rescore_routes(conn, tuned)
+
+    assert report.totals == {"now": 2, "digest": 2, "log": 1}
+    assert report.moves == {("now", "digest"): 1, (None, "now"): 1}
+    assert report.changed == 2
+    assert _routes(conn)["0000000001-26-000001"] == "digest"
+    assert _routes(conn)["0000000001-26-000005"] == "now"
+
+
+def test_reroute_with_unchanged_thresholds_moves_nothing(conn):
+    _seed_routes(conn, [(4.2, "now"), (3.0, "digest"), (1.0, "log")])
+
+    report = rescore_routes(conn, Settings())
+
+    assert report.changed == 0
+    assert report.totals == {"now": 1, "digest": 1, "log": 1}
+
+
+def test_reroute_dry_run_leaves_briefs_untouched(conn):
+    _seed_routes(conn, [(4.2, "now"), (3.0, "digest"), (4.7, None)])
+    before = _routes(conn)
+    tuned = Settings(thresholds=Thresholds(brief_now=4.5))
+
+    report = rescore_routes(conn, tuned, dry_run=True)
+
+    assert report.moves == {("now", "digest"): 1, (None, "now"): 1}
+    assert _routes(conn) == before
+    assert not conn.in_transaction
 
 
 @respx.mock

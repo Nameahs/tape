@@ -31,7 +31,7 @@ tape stats [--days 7]    # filings, scores, routes and Jev spend per day, plus E
 tape retry               # filings Tape gave up scoring or fetching; --score/--fetch clear them for the next pass
 tape backfill --days 90  # score past filings for the evaluation
 tape evaluate            # prices (last 30 days; --days N), abnormal returns, metrics
-tape reroute             # re-apply tuned thresholds without re-scoring
+tape reroute [--dry-run] # re-apply tuned thresholds without re-scoring; prints what moved
 tape dashboard           # writes out/dashboard.html
 ```
 
