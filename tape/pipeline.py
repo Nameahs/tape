@@ -14,7 +14,7 @@ import httpx
 
 from tape import db
 from tape.config import Settings
-from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FeedPage, FilingRef
+from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FeedPage, FilingRef, IndexPageError
 from tape.edgar import is_outage as is_edgar_outage
 from tape.route import route
 from tape.score import SystemOneClient, is_outage, score_many
@@ -93,7 +93,7 @@ def recorded(conn: sqlite3.Connection, kind: str) -> Iterator[PassStats]:
 
 
 def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], settings: Settings,
-           stats: PassStats) -> httpx.HTTPError | None:
+           stats: PassStats) -> Exception | None:
     """Fetch and store the new filings in `refs`.
 
     Returns the error that cut the pass short, if EDGAR blocked us or looks to be down; the filings
@@ -134,7 +134,7 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
             outages_in_a_row = 0
             with db.transaction(conn):
                 attempts = db.record_fetch_failure(conn, ref.accession_no, f"{type(e).__name__}: {e}"[:500])
-            if isinstance(e, EmptyFilingError):
+            if isinstance(e, (EmptyFilingError, IndexPageError)):
                 log.warning("skipped: %s", e)
             else:
                 log.exception("fetch failed for %s", ref.accession_no)
@@ -224,7 +224,7 @@ def fill_missing_tickers(conn: sqlite3.Connection, edgar: Edgar, now: datetime |
 def run_pass(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, settings: Settings) -> PassStats:
     with recorded(conn, "pass") as stats:
         feed_error: httpx.HTTPError | None = None
-        stopped: httpx.HTTPError | None = None
+        stopped: Exception | None = None
         try:
             page = edgar.latest_8k()
         except EdgarBlockedError:

@@ -13,7 +13,7 @@ from tape.edgar import FEED_URL, TICKERS_URL, Edgar, EdgarBlockedError, FeedPage
 from tape.pipeline import PassStats, backfill, feed_gap, rescore_routes, run_pass, score_and_route, today_et
 from tests.conftest import make_filing, make_score
 from tests.fakes import FakeJev
-from tests.test_edgar import FIX, INDEX, _index_without_documents, _mock_filing
+from tests.test_edgar import FIX, INDEX, MAINTENANCE_PAGE, _index_with_accepted, _index_without_documents, _mock_filing
 
 
 @respx.mock
@@ -330,6 +330,39 @@ def test_ingest_stops_after_three_outage_failures_in_a_row(conn, no_backoff):
     assert isinstance(stopped, httpx.HTTPStatusError)
     assert stats.fetch_errors == pipeline.FETCH_OUTAGE_STOP_AFTER == 3
     assert routes[2].called and not routes[3].called
+
+
+@respx.mock
+def test_a_maintenance_page_served_with_200_does_not_count_against_filings(conn, caplog):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    index = respx.get(INDEX)
+    edgar, jev, settings = Edgar("ua", per_second=1000), FakeJev(), Settings()
+
+    index.respond(200, text=MAINTENANCE_PAGE)
+    for _ in range(db.MAX_FETCH_ATTEMPTS + 1):
+        stats = run_pass(conn, edgar, jev, settings)
+        assert (stats.fetched, stats.fetch_errors, stats.outage) == (0, 1, True)
+    assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
+    assert "Traceback" not in caplog.text and "KeyError" not in caplog.text
+
+    index.respond(200, text=(FIX / "index.htm").read_text())
+    again = run_pass(conn, edgar, jev, settings)
+    assert (again.fetched, again.scored, again.outage) == (1, 1, False)
+
+
+@respx.mock
+def test_an_index_page_missing_its_accepted_time_is_the_filings_failure(conn, caplog):
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    _mock_filing(respx)
+    respx.get(INDEX).respond(200, text=_index_with_accepted(""))
+
+    stats = run_pass(conn, Edgar("ua", per_second=1000), FakeJev(), Settings())
+
+    assert (stats.fetched, stats.fetch_errors, stats.outage) == (0, 1, False)
+    [row] = conn.execute("SELECT last_error FROM fetch_failures").fetchall()
+    assert row["last_error"] == f"IndexPageError: {INDEX} has no Accepted time"
+    assert "Traceback" not in caplog.text
 
 
 @respx.mock

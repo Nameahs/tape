@@ -15,7 +15,6 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import TypeGuard
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
@@ -75,11 +74,14 @@ def is_block_page(resp: httpx.Response) -> bool:
     return any(marker in body for marker in BLOCK_MARKERS)
 
 
-def is_outage(exc: Exception) -> TypeGuard[httpx.HTTPError]:
+def is_outage(exc: Exception) -> bool:
     """Whether a failed request is about EDGAR rather than the URL that happened to hit it: a timeout, a
-    dropped connection, or a status that still means "slow down" or "try later" after Edgar.get's retries.
-    A block is reported separately as EdgarBlockedError, and a 404 is about the filing.
+    dropped connection, a status that still means "slow down" or "try later" after Edgar.get's retries, or
+    a 200 page that isn't a filing index at all (a maintenance or truncated page). A block is reported
+    separately as EdgarBlockedError, and a 404 or an index page missing a field is about the filing.
     """
+    if isinstance(exc, NotAnIndexPageError):
+        return True
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in RETRY_STATUSES
     return isinstance(exc, httpx.TransportError)
@@ -87,6 +89,15 @@ def is_outage(exc: Exception) -> TypeGuard[httpx.HTTPError]:
 
 class EmptyFilingError(ValueError):
     """A filing whose documents yielded no text to score."""
+
+
+class IndexPageError(ValueError):
+    """A filing index page that is missing something every filing index has, such as its acceptance time."""
+
+
+class NotAnIndexPageError(IndexPageError):
+    """EDGAR answered a filing index URL with a page that has none of a filing index's header blocks:
+    its maintenance page, or a page cut off under load. That is about EDGAR, not the filing."""
 
 
 @dataclass(frozen=True)
@@ -360,7 +371,14 @@ def parse_index_page(html: str, base_url: str) -> IndexPage:
         if value is not None:
             info[head.get_text(strip=True)] = value.get_text("\n", strip=True)
 
-    accepted = datetime.strptime(info["Accepted"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=ET)
+    if not info:
+        raise NotAnIndexPageError(f"{base_url} is not a filing index page")
+    try:
+        accepted = datetime.strptime(info["Accepted"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=ET)
+    except KeyError:
+        raise IndexPageError(f"{base_url} has no Accepted time") from None
+    except ValueError:
+        raise IndexPageError(f"{base_url} has an unreadable Accepted time: {info['Accepted']!r}") from None
     items = _ITEM.findall(info.get("Items", ""))
 
     main_url = exhibit_url = None
