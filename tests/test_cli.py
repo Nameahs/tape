@@ -693,3 +693,17 @@ def test_reroute_prints_the_moves(tmp_path, monkeypatch, capsys):
     assert main(["reroute"]) == 0
 
     assert capsys.readouterr().out.splitlines()[0] == "now -> digest: 1"
+
+
+def test_reroute_dry_run_prints_moves_without_writing(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+    monkeypatch.setenv("TAPE_BRIEF_NOW", "4.5")
+
+    assert main(["reroute", "--dry-run"]) == 0
+
+    out = capsys.readouterr().out.splitlines()
+    assert out[:2] == ["dry run, nothing written", "now -> digest: 1"]
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT route FROM briefs WHERE accession_no = ?", (acc,)).fetchone()[0] == "now"

@@ -30,7 +30,7 @@ tape digest [--send]     # material filings from the last 24h (optionally to Tel
 tape stats [--days 7]    # filings, scores, routes and Jev spend per day, plus EDGAR blocks, feed gaps and missing daily indexes
 tape backfill --days 90  # score past filings for the evaluation
 tape evaluate            # prices (last 30 days; --days N), abnormal returns, metrics
-tape reroute             # re-apply tuned thresholds without re-scoring
+tape reroute [--dry-run] # re-apply tuned thresholds without re-scoring; prints what moved
 tape dashboard           # writes out/dashboard.html
 ```
 
