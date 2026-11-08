@@ -19,6 +19,7 @@ from tape.score import (
     MATERIALITY_LEVELS,
     OUTAGE_STOP_AFTER,
     QUESTIONS,
+    _level_probs,
     is_outage,
     score_many,
     score_one,
@@ -71,6 +72,21 @@ def test_score_one_tolerates_answers_without_confidence(conn):
 
     s = score_one(Bare(), _row(conn), "m", 0.042)
     assert s.materiality_confidence is None and s.materiality_probs is None
+
+
+def test_level_probs_keeps_each_probability_at_its_level():
+    sparse = type("A", (), {"probabilities": {0: 0.2, 4: 0.8}})()
+    assert json.loads(_level_probs(sparse)) == [0.2, 0.0, 0.0, 0.0, 0.8]
+
+    wire = type("A", (), {"probabilities": {"3": 0.6, "1": 0.4}})()
+    assert json.loads(_level_probs(wire)) == [0.0, 0.4, 0.0, 0.6, 0.0]
+
+
+def test_level_probs_drops_unknown_levels(caplog):
+    answer = type("A", (), {"probabilities": {0: 0.5, 1: 0.3, 5: 0.1, "high": 0.1}})()
+    with caplog.at_level("WARNING", logger="tape.score"):
+        assert json.loads(_level_probs(answer)) == [0.5, 0.3, 0.0, 0.0, 0.0]
+    assert "unknown levels" in caplog.text and "'5'" in caplog.text and "'high'" in caplog.text
 
 
 def test_score_many_skips_failures(conn):

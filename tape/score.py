@@ -89,13 +89,27 @@ def _confidence(answer: Any) -> float | None:
 def _level_probs(answer: Any) -> str | None:
     """Materiality level probabilities as a JSON list ordered by level (index 0 is level 1).
 
-    The typed SDK keys them by int, the wire format by string; accept either.
+    The typed SDK keys them by int, the wire format by string; accept either. The list always has one entry per
+    level, so a sparse answer that leaves a level out can't shift the later levels down: missing levels are 0.0
+    and keys outside Jev's 0..4 range are dropped.
     """
     probs = getattr(answer, "probabilities", None)
     if not probs:
         return None
-    ordered = sorted(probs.items(), key=lambda kv: int(kv[0]))
-    return json.dumps([round(float(p), 4) for _, p in ordered])
+    levels = [0.0] * len(MATERIALITY_LEVELS)
+    unexpected = []
+    for key, p in probs.items():
+        try:
+            index = int(key)
+        except (TypeError, ValueError):
+            index = -1
+        if 0 <= index < len(levels):
+            levels[index] = round(float(p), 4)
+        else:
+            unexpected.append(key)
+    if unexpected:
+        log.warning("Ignoring materiality probabilities for unknown levels %s", sorted(map(str, unexpected)))
+    return json.dumps(levels)
 
 
 def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float) -> ScoreRow:
