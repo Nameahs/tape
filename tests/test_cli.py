@@ -789,3 +789,20 @@ def test_retry_needs_an_existing_store(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("TAPE_DB_PATH", str(path))
     assert main(["retry", "--score"]) == 2
     assert not path.exists()
+
+
+@respx.mock
+def test_digest_send_logs_why_telegram_refused(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    token = "123456:SECRET"
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    respx.post(API.format(token=token)).respond(
+        400, json={"ok": False, "error_code": 400, "description": "Bad Request: chat not found"})
+
+    assert main(["digest", "--send"]) == 1
+    assert "digest not sent" in caplog.text
+    assert "Bad Request: chat not found" in caplog.text
+    assert token not in caplog.text
