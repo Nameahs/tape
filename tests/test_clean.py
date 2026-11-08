@@ -110,3 +110,59 @@ def test_state_text_gives_body_the_room_a_short_exhibit_leaves():
     assert len(text) <= 600
     assert text.endswith("Short press release.")
     assert len(text) >= 590
+
+
+def test_inline_tags_stay_inside_their_sentence():
+    html = (
+        "<p>The merger closed after the company obtained all required shareholder "
+        '<a href="#">signatures</a> and regulatory approvals.</p>'
+        "<p>Revenue rose 40% to $5 billion, and guidance was raised.</p>"
+    )
+    text = drop_boilerplate(html_to_text(html))
+    assert "shareholder signatures and regulatory approvals." in text
+    assert "Revenue rose 40% to $5 billion" in text
+
+
+@pytest.mark.parametrize("wrap", ["<p>{}</p>", "<div>{}</div>", "<p><b>{}</b></p>", "<br>{}<br>"])
+def test_a_signatures_heading_on_its_own_still_cuts(wrap):
+    html = (
+        "<p>Item 5.02 Departure of Directors. Jane Doe notified the Board of her resignation "
+        "effective immediately.</p>" + wrap.format("SIGNATURES") +
+        "<p>Pursuant to the requirements of the Securities Exchange Act of 1934...</p>"
+    )
+    text = drop_boilerplate(html_to_text(html))
+    assert text.endswith("effective immediately.")
+
+
+def test_inline_xbrl_spans_join_into_one_line():
+    html = (
+        '<div><span style="font-family:Times">Net sales were </span>'
+        '<ix:nonFraction name="us-gaap:Revenues" scale="6">412.5</ix:nonFraction>'
+        '<span> million, up </span><span>12%</span><span>.</span></div>'
+        "<div><span>Second paragraph.</span></div>"
+    )
+    assert html_to_text(html) == "Net sales were 412.5 million, up 12%.\nSecond paragraph."
+
+
+def test_source_newlines_inside_a_paragraph_are_spaces():
+    html = "<p>The Board approved\nthe plan on\r\nMarch 3.</p><p>Next.</p>"
+    assert html_to_text(html) == "The Board approved the plan on March 3.\nNext."
+
+
+def test_table_cells_and_list_items_stay_on_separate_lines():
+    html = (
+        "<table><tr><td>Revenue</td><td>$5.0</td></tr></table>"
+        "<ul><li>First</li><li>Second</li></ul>"
+    )
+    assert html_to_text(html).splitlines() == ["Revenue", "$5.0", "First", "Second"]
+
+
+def test_plain_text_filing_keeps_its_lines():
+    txt = "ITEM 8.01 OTHER EVENTS\n\nThe company announced a dividend.\nSIGNATURES\nBy: /s/ CFO"
+    assert html_to_text(txt).splitlines() == [
+        "ITEM 8.01 OTHER EVENTS", "The company announced a dividend.", "SIGNATURES", "By: /s/ CFO",
+    ]
+
+
+def test_html_comments_do_not_leak_into_text():
+    assert html_to_text("<p>Kept<!-- a\nnote --> text.</p>") == "Kept text."

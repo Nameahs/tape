@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 _WS = re.compile(r"[ \t ]+")
 _BLANKS = re.compile(r"\n{3,}")
@@ -26,6 +26,14 @@ _BOILERPLATE_START = re.compile(
     r")[ \t]*(?:[:\-–—]|$)",
     re.IGNORECASE | re.MULTILINE,
 )
+# Elements that start a new line. Everything else (a, b, i, span, font, ix:* ...) is inline and
+# its text runs on with its neighbours, so a linked or bolded word stays inside its sentence.
+_BLOCK_TAGS = frozenset({
+    "address", "article", "aside", "blockquote", "body", "caption", "center", "dd", "div", "dl",
+    "dt", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header",
+    "hr", "html", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "td",
+    "tfoot", "th", "thead", "tr", "ul",
+})
 
 
 def html_to_text(html: str) -> str:
@@ -35,9 +43,18 @@ def html_to_text(html: str) -> str:
     # Inline XBRL wraps facts in hidden headers; drop them.
     for tag in soup.find_all(style=re.compile(r"display:\s*none", re.IGNORECASE)):
         tag.decompose()
+    if soup.find(_BLOCK_TAGS) is not None:
+        # Real HTML: a newline in the source is just whitespace, like a space. (A plain-text
+        # filing has no block tags, and there the newlines are the only structure we get.)
+        for node in soup.find_all(string=True):
+            if type(node) is NavigableString and "\n" in node and node.find_parent("pre") is None:
+                node.replace_with(node.replace("\r", " ").replace("\n", " "))
+        for tag in soup.find_all(_BLOCK_TAGS):
+            tag.insert_before("\n")
+            tag.insert_after("\n")
     for br in soup.find_all("br"):
         br.replace_with("\n")
-    text = soup.get_text("\n")
+    text = soup.get_text()
     lines = [_WS.sub(" ", line).strip() for line in text.splitlines()]
     text = "\n".join(line for line in lines if line)
     return _BLANKS.sub("\n\n", text).strip()
