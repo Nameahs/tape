@@ -149,12 +149,59 @@ def test_source_newlines_inside_a_paragraph_are_spaces():
     assert html_to_text(html) == "The Board approved the plan on March 3.\nNext."
 
 
-def test_table_cells_and_list_items_stay_on_separate_lines():
+def test_table_rows_and_list_items_stay_on_separate_lines():
     html = (
-        "<table><tr><td>Revenue</td><td>$5.0</td></tr></table>"
+        "<table><tr><td>Revenue</td><td>$5.0</td></tr><tr><td>Costs</td><td>$3.0</td></tr></table>"
         "<ul><li>First</li><li>Second</li></ul>"
     )
-    assert html_to_text(html).splitlines() == ["Revenue", "$5.0", "First", "Second"]
+    assert html_to_text(html).splitlines() == ["Revenue | $5.0", "Costs | $3.0", "First", "Second"]
+
+
+def test_income_statement_row_keeps_labels_and_periods_in_order():
+    html = (
+        "<p>Results:</p><table>"
+        "<tr><th></th><th>Q3 2026</th><th></th><th>Q3 2025</th></tr>"
+        "<tr><td>Revenue</td><td>$</td><td>412.5</td><td>&#160;</td><td>$</td><td>368.1</td></tr>"
+        "<tr><td>Net income (loss)</td><td>$</td><td><b>51.2</b></td><td></td><td>$</td><td>(4.7</td><td>)</td></tr>"
+        "<tr><td>Gross margin</td><td>41.0</td><td>%</td><td></td><td>38.2</td><td>%</td></tr>"
+        "</table>"
+    )
+    assert html_to_text(html).splitlines() == [
+        "Results:",
+        "Q3 2026 | Q3 2025",
+        "Revenue | $412.5 | $368.1",
+        "Net income (loss) | $51.2 | $(4.7)",
+        "Gross margin | 41.0% | 38.2%",
+    ]
+
+
+def test_spacer_rows_and_cells_are_dropped():
+    html = "<table><tr><td>&#160;</td><td></td></tr><tr><td>A</td><td> </td><td>B</td></tr></table>"
+    assert html_to_text(html) == "A | B"
+
+
+def test_source_newlines_inside_a_cell_are_spaces():
+    html = "<table><tr><td>Diluted earnings\nper share</td><td>$1.02</td></tr></table>"
+    assert html_to_text(html) == "Diluted earnings per share | $1.02"
+
+
+def test_layout_table_keeps_paragraphs_on_their_own_lines():
+    html = (
+        "<table><tr><td><p>First paragraph of the release.</p><p>Second paragraph.</p></td>"
+        "<td><div>Sidebar note.</div></td></tr></table>"
+    )
+    assert html_to_text(html).splitlines() == [
+        "First paragraph of the release.", "Second paragraph.", "Sidebar note.",
+    ]
+
+
+def test_row_holding_a_nested_table_keeps_the_inner_rows():
+    html = (
+        "<table><tr><td>Outer</td><td>"
+        "<table><tr><td>Revenue</td><td>$5.0</td></tr></table>"
+        "</td></tr></table>"
+    )
+    assert html_to_text(html).splitlines() == ["Outer", "Revenue | $5.0"]
 
 
 def test_plain_text_filing_keeps_its_lines():

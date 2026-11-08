@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 
 from bs4 import BeautifulSoup, NavigableString
 
@@ -34,6 +35,13 @@ _BLOCK_TAGS = frozenset({
     "hr", "html", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "td",
     "tfoot", "th", "thead", "tr", "ul",
 })
+_CELLS = ("td", "th")
+# Cells that are only a currency sign or an opening paren belong to the value after them; cells
+# that are only a closing paren or a percent sign belong to the value before them. Financial
+# tables (Workiva, inline XBRL) put these in cells of their own.
+_LEADS = frozenset("$€£¥(")
+_TRAILS = frozenset(")%")
+_CELL_SEP = " | "
 
 
 def html_to_text(html: str) -> str:
@@ -44,6 +52,7 @@ def html_to_text(html: str) -> str:
     for tag in soup.find_all(style=re.compile(r"display:\s*none", re.IGNORECASE)):
         tag.decompose()
     if soup.find(_BLOCK_TAGS) is not None:
+        _flatten_table_rows(soup)
         # Real HTML: a newline in the source is just whitespace, like a space. (A plain-text
         # filing has no block tags, and there the newlines are the only structure we get.)
         for node in soup.find_all(string=True):
@@ -58,6 +67,34 @@ def html_to_text(html: str) -> str:
     lines = [_WS.sub(" ", line).strip() for line in text.splitlines()]
     text = "\n".join(line for line in lines if line)
     return _BLANKS.sub("\n\n", text).strip()
+
+
+def _flatten_table_rows(soup: BeautifulSoup) -> None:
+    """Put each data row of a table on one line, its non-empty cells joined by " | ".
+
+    A row whose cells hold block content (a layout table wrapping paragraphs, or a nested table)
+    is left alone, so its paragraphs still come out one per line.
+    """
+    for row in soup.find_all("tr"):
+        cells = row.find_all(_CELLS, recursive=False)
+        if not cells or any(cell.find(_BLOCK_TAGS) is not None for cell in cells):
+            continue
+        row.clear()
+        row.append(_join_cells(" ".join(cell.get_text().split()) for cell in cells))
+
+
+def _join_cells(texts: Iterable[str]) -> str:
+    parts: list[str] = []
+    glue_next = False
+    for text in texts:
+        if not text:  # spacer cell
+            continue
+        if parts and (glue_next or set(text) <= _TRAILS):
+            parts[-1] += text
+        else:
+            parts.append(text)
+        glue_next = set(text) <= _LEADS
+    return _CELL_SEP.join(parts)
 
 
 def drop_boilerplate(text: str) -> str:
