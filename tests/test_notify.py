@@ -184,3 +184,45 @@ def test_send_telegram_keeps_the_token_out_of_transport_errors(monkeypatch):
     with pytest.raises(httpx.ConnectError) as e:
         send_telegram("hello", token=token, chat_id="42", client=httpx.Client())
     assert token not in str(e.value)
+
+
+@respx.mock
+def test_send_telegram_error_includes_telegram_description(sleeps):
+    token = "123456:SECRET"
+    respx.post(API.format(token=token)).respond(
+        400, json={"ok": False, "error_code": 400, "description": "Bad Request: chat not found"})
+    with pytest.raises(httpx.HTTPStatusError) as e:
+        send_telegram("hello", token=token, chat_id="42", client=httpx.Client())
+    assert "400" in str(e.value)
+    assert str(e.value).endswith(": Bad Request: chat not found")
+    assert token not in str(e.value)
+    assert e.value.response.status_code == 400
+
+
+@respx.mock
+def test_send_telegram_includes_description_after_last_rate_limit(sleeps):
+    token = "123456:SECRET"
+    respx.post(API.format(token=token)).respond(
+        429, json={"ok": False, "description": "Too Many Requests: retry after 5",
+                   "parameters": {"retry_after": 5}})
+    with pytest.raises(httpx.HTTPStatusError) as e:
+        send_telegram("hi", token=token, chat_id="42", client=httpx.Client())
+    assert "Too Many Requests: retry after 5" in str(e.value)
+
+
+@respx.mock
+@pytest.mark.parametrize("body", [
+    {"content": b"<html>Forbidden</html>", "headers": {"content-type": "text/html"}},
+    {"json": ["not", "an", "object"]},
+    {"json": {"ok": False, "description": 403}},
+    {"json": {"ok": False, "description": "  "}},
+])
+def test_send_telegram_error_without_usable_description(sleeps, body):
+    token = "123456:SECRET"
+    respx.post(API.format(token=token)).respond(403, **body)
+    with pytest.raises(httpx.HTTPStatusError) as e:
+        send_telegram("hello", token=token, chat_id="42", client=httpx.Client())
+    message = str(e.value)
+    # httpx's own message, unchanged: it ends with the MDN link for the status.
+    assert message.endswith("/Status/403")
+    assert token not in message

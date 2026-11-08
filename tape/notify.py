@@ -95,9 +95,26 @@ def _post(client: httpx.Client, url: str, payload: dict[str, object]) -> httpx.R
         if resp.status_code in RETRY_STATUSES and attempt < last:
             time.sleep(float(2**attempt))
             continue
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # The status line alone makes a wrong chat id, a blocked bot and a revoked token look
+            # the same; Telegram says which one in the body.
+            description = _description(resp)
+            if description:
+                e.args = (f"{e.args[0]}: {description}", *e.args[1:])
+            raise
         return resp
     raise AssertionError("unreachable")
+
+
+def _description(resp: httpx.Response) -> str | None:
+    """Telegram's explanation of a failed call ("Bad Request: chat not found"), if the body has one."""
+    try:
+        description = resp.json().get("description")
+    except (ValueError, AttributeError):
+        return None
+    return description.strip() or None if isinstance(description, str) else None
 
 
 def _retry_after(resp: httpx.Response, attempt: int) -> float:
