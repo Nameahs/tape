@@ -283,7 +283,8 @@ def build_parser() -> argparse.ArgumentParser:
     rr = sub.add_parser("reroute", help="re-apply thresholds to stored scores")
     rr.add_argument("--dry-run", action="store_true",
                     help="show which filings would change route without writing anything")
-    rr.set_defaults(fn=cmd_reroute)
+    # Reroute rewrites routes a running pass is also writing; --dry-run writes nothing, so it skips the lock.
+    rr.set_defaults(fn=cmd_reroute, busy_exit=1, busy_note="nothing rerouted; try again when it finishes")
     pe = sub.add_parser("pending", help="recent filings waiting for a brief (JSON)")
     pe.add_argument("--max-age-hours", type=_positive_int, default=24,
                     help="skip filings EDGAR accepted longer ago than this (default 24)")
@@ -330,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
         conn = db.connect(settings.db_path, create=getattr(args, "creates_store", False))
         try:
             busy_exit = getattr(args, "busy_exit", None)
-            if busy_exit is None:
+            if busy_exit is None or getattr(args, "dry_run", False):
                 return args.fn(args, settings, conn)
             return _run_locked(args, settings, conn, busy_exit)
         finally:
@@ -347,14 +348,16 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_locked(args, settings, conn, busy_exit: int) -> int:
     """Run a pipeline command under the pipeline lock, so an overlapping run or backfill doesn't
-    fetch and score (and pay Jev for) the same filings twice."""
+    fetch and score (and pay Jev for) the same filings twice, and a reroute can't leave a running
+    pass storing routes from the old thresholds or hold the store long enough to fail its writes."""
     from tape.lock import PipelineBusy, pipeline_lock
 
     try:
         with pipeline_lock(settings.db_path):
             return args.fn(args, settings, conn)
     except PipelineBusy:
-        print("another tape run or backfill is in progress; skipping this pass", file=sys.stderr)
+        note = getattr(args, "busy_note", "skipping this pass")
+        print(f"another tape run or backfill is in progress; {note}", file=sys.stderr)
         return busy_exit
 
 

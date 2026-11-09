@@ -709,6 +709,37 @@ def test_reroute_dry_run_prints_moves_without_writing(tmp_path, monkeypatch, cap
         assert conn.execute("SELECT route FROM briefs WHERE accession_no = ?", (acc,)).fetchone()[0] == "now"
 
 
+def test_reroute_waits_for_a_running_pass(tmp_path, monkeypatch, capsys):
+    from tape.lock import pipeline_lock
+
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)  # materiality 4.4, routed 'now'
+    monkeypatch.setenv("TAPE_BRIEF_NOW", "4.5")
+
+    with pipeline_lock(path):
+        assert main(["reroute"]) == 1
+
+    assert capsys.readouterr().err.strip() == (
+        "another tape run or backfill is in progress; nothing rerouted; try again when it finishes")
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("SELECT route FROM briefs WHERE accession_no = ?", (acc,)).fetchone()[0] == "now"
+
+
+def test_reroute_dry_run_needs_no_lock(tmp_path, monkeypatch, capsys):
+    from tape.lock import pipeline_lock
+
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    monkeypatch.setenv("TAPE_BRIEF_NOW", "4.5")
+
+    with pipeline_lock(path):
+        assert main(["reroute", "--dry-run"]) == 0
+
+    assert capsys.readouterr().out.splitlines()[:2] == ["dry run, nothing written", "now -> digest: 1"]
+
+
 def _given_up_store(path):
     conn = db.connect(path)
     stuck = make_filing(1)
