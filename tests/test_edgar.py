@@ -21,6 +21,7 @@ from tape.edgar import (
     parse_feed,
     parse_form_index,
     parse_index_page,
+    parse_tickers,
 )
 
 FIX = Path(__file__).parent / "fixtures"
@@ -437,3 +438,65 @@ def test_parse_form_index_dedupes_co_registrants():
     ]
     refs = parse_form_index("Form Type   Company Name\n" + rule + "\n" + "\n".join(lines) + "\n")
     assert [(r.accession_no, r.cik) for r in refs] == [("0000000004-26-000011", "0000000004")]
+
+
+@respx.mock
+@pytest.mark.parametrize("body", [
+    '{"message": "Service temporarily unavailable"}',
+    '[{"cik_str": 1, "ticker": "EXMP"}]',
+    '{"0": {"ticker": "EXMP"}}',
+    '{"0": {"cik_str": 1, "ticker": null}}',
+])
+def test_error_shaped_ticker_file_on_cold_cache_gives_no_ticker_and_is_not_cached(tmp_path, body):
+    respx.get(TICKERS_URL).respond(200, text=body)
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") is None
+    assert not (tmp_path / "company_tickers.json").exists()
+
+
+@respx.mock
+def test_error_shaped_ticker_file_does_not_fail_fetch(tmp_path):
+    _mock_filing(respx)
+    respx.get(TICKERS_URL).respond(200, text='{"message": "Service temporarily unavailable"}')
+    edgar = Edgar("ua", per_second=1000, cache_dir=tmp_path)
+    filing = edgar.fetch(FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX), 5000)
+    assert filing.ticker is None
+
+
+@respx.mock
+def test_error_shaped_ticker_file_falls_back_to_stale_cache(tmp_path):
+    cache = tmp_path / "company_tickers.json"
+    cache.write_text('{"0": {"cik_str": 1, "ticker": "OLD", "title": "Example Corp"}}')
+    day_old = time.time() - 25 * 3600
+    os.utime(cache, (day_old, day_old))
+    respx.get(TICKERS_URL).respond(200, text='{"message": "Service temporarily unavailable"}')
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "OLD"
+    assert "OLD" in cache.read_text()
+
+
+@respx.mock
+def test_fresh_but_error_shaped_ticker_cache_is_replaced(tmp_path):
+    (tmp_path / "company_tickers.json").write_text('{"message": "Service temporarily unavailable"}')
+    route = respx.get(TICKERS_URL).respond(200, text=_tickers_text())
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert route.call_count == 1
+    assert "EXMP" in (tmp_path / "company_tickers.json").read_text()
+
+
+def test_parse_tickers_skips_malformed_rows():
+    data = {
+        "0": {"cik_str": 1, "ticker": "EXMP"},
+        "1": {"cik_str": "2", "ticker": "STR"},  # CIK as a string of digits is fine
+        "2": {"cik_str": "abc", "ticker": "BAD"},
+        "3": {"cik_str": 4},
+        "4": "not a row",
+        "5": {"cik_str": True, "ticker": "BOOL"},
+        "6": {"cik_str": 1, "ticker": "EXMP-PA"},  # first listing for a CIK wins
+    }
+    assert parse_tickers(data) == {"0000000001": "EXMP", "0000000002": "STR"}
+
+
+def test_parse_tickers_rejects_a_file_with_no_usable_rows():
+    with pytest.raises(ValueError):
+        parse_tickers({})
+    with pytest.raises(ValueError):
+        parse_tickers({"0": {"cik_str": "x", "ticker": 5}})

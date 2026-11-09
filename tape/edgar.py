@@ -204,42 +204,40 @@ class Edgar:
             if failed_at is not None and time.monotonic() - failed_at < TICKERS_RETRY_AFTER:
                 return None
             try:
-                rows = self._ticker_rows()
+                tickers = self._load_tickers()
             except (httpx.HTTPError, ValueError):
                 self._tickers_failed_at = time.monotonic()
                 log.warning("could not load the ticker map; storing filings without tickers for now",
                             exc_info=True)
                 return None
-            tickers: dict[str, str] = {}
-            for row in rows.values():
-                # First listing wins; it is usually the common stock.
-                tickers.setdefault(f"{int(row['cik_str']):010d}", row["ticker"])
             self._tickers = tickers
             self._tickers_failed_at = None
         return self._tickers.get(cik)
 
-    def _ticker_rows(self) -> dict:
-        """The SEC ticker file, from the on-disk cache when it is less than a day old.
+    def _load_tickers(self) -> dict[str, str]:
+        """CIK -> ticker from the SEC ticker file, using the on-disk cache when it is less than a day old.
 
         A scheduled pass runs every few minutes in a fresh process, so without the cache we
         would download the same ~1 MB file a few hundred times a day. If the refresh fails we
-        fall back to a stale copy rather than losing tickers for the whole pass.
+        fall back to a stale copy rather than losing tickers for the whole pass. A download that
+        parses as JSON but isn't a ticker map (an error body served with a 200) counts as a
+        failed refresh, and is never written to the cache.
         """
         path = self._cache_dir / TICKERS_FILE if self._cache_dir is not None else None
-        cached = _read_json(path) if path is not None else None
+        cached = _cached_tickers(path) if path is not None else None
         if path is not None and cached is not None and time.time() - path.stat().st_mtime < TICKERS_MAX_AGE:
             return cached
         try:
             resp = self.get(TICKERS_URL)
-            data = resp.json()
+            tickers = parse_tickers(resp.json())
         except (httpx.HTTPError, ValueError):
             if cached is None:
                 raise
-            log.warning("ticker map refresh failed; using stale cache at %s", path)
+            log.warning("ticker map refresh failed; using stale cache at %s", path, exc_info=True)
             return cached
         if path is not None:
             _write_ticker_cache(path, resp.text)
-        return data
+        return tickers
 
     def fetch(self, ref: FilingRef, max_chars: int) -> Filing:
         index = parse_index_page(self.get(ref.index_url).text, ref.index_url)
@@ -277,10 +275,21 @@ def _retry_delay(resp: httpx.Response, attempt: int) -> float:
     return min(max(delay, 0.0), MAX_RETRY_AFTER)
 
 
-def _read_json(path: Path) -> dict | None:
+def _read_json(path: Path) -> object | None:
     try:
         return json.loads(path.read_text())
     except (OSError, ValueError):
+        return None
+
+
+def _cached_tickers(path: Path) -> dict[str, str] | None:
+    data = _read_json(path)
+    if data is None:
+        return None
+    try:
+        return parse_tickers(data)
+    except ValueError:
+        log.warning("ignoring ticker cache at %s: not a ticker map", path)
         return None
 
 
@@ -292,6 +301,34 @@ def _write_ticker_cache(path: Path, text: str) -> None:
 
 
 # Parsers (pure functions, tested against saved pages) --------------------------------------
+
+
+def parse_tickers(data: object) -> dict[str, str]:
+    """CIK (10 digits) -> ticker from the parsed company_tickers.json.
+
+    The file is {"0": {"cik_str": 320193, "ticker": "AAPL", "title": ...}, ...}. Malformed rows are
+    skipped; ValueError if the file isn't that shape at all or has no usable row.
+    """
+    if not isinstance(data, dict):
+        raise ValueError(f"ticker file is a {type(data).__name__}, not an object")
+    tickers: dict[str, str] = {}
+    bad = 0
+    for row in data.values():
+        cik = row.get("cik_str") if isinstance(row, dict) else None
+        ticker = row.get("ticker") if isinstance(row, dict) else None
+        if isinstance(cik, str) and cik.strip().isdigit():
+            cik = int(cik)
+        if isinstance(cik, bool) or not isinstance(cik, int) or cik <= 0 or not isinstance(ticker, str) \
+                or not ticker.strip():
+            bad += 1
+            continue
+        # First listing wins; it is usually the common stock.
+        tickers.setdefault(f"{cik:010d}", ticker.strip())
+    if not tickers:
+        raise ValueError(f"ticker file has no usable rows ({bad} malformed)")
+    if bad:
+        log.warning("skipped %d malformed rows in the ticker file", bad)
+    return tickers
 
 
 def parse_feed(xml: str) -> list[FilingRef]:
