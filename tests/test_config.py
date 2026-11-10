@@ -1,6 +1,6 @@
 import pytest
 
-from tape.config import Settings, Thresholds
+from tape.config import ConfigError, Settings, Thresholds
 
 
 def test_defaults():
@@ -149,9 +149,10 @@ def test_int_setting_rejects_out_of_range(monkeypatch, name, raw):
         Settings.from_env()
 
 
-def test_retry_budget_must_be_positive(monkeypatch):
-    monkeypatch.setenv("TAPE_JEV_RETRY_BUDGET_S", "0")
-    with pytest.raises(ValueError, match="jev_retry_budget_s must be positive"):
+@pytest.mark.parametrize("raw", ["0", "-5"])
+def test_retry_budget_must_be_positive(monkeypatch, raw):
+    monkeypatch.setenv("TAPE_JEV_RETRY_BUDGET_S", raw)
+    with pytest.raises(ConfigError, match="^TAPE_JEV_RETRY_BUDGET_S: must be positive"):
         Settings.from_env()
 
 
@@ -165,8 +166,21 @@ def test_non_finite_numbers_are_rejected(monkeypatch, name, raw):
 
 def test_jev_price_must_not_be_negative(monkeypatch):
     monkeypatch.setenv("TAPE_JEV_PRICE_PER_M", "-0.042")
-    with pytest.raises(ValueError, match="jev_input_price_per_m must not be negative"):
+    with pytest.raises(ConfigError, match="^TAPE_JEV_PRICE_PER_M: must be at least 0, got -0.042"):
         Settings.from_env()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "variable"),
+    [
+        ({"jev_retry_budget_s": 0.0}, "TAPE_JEV_RETRY_BUDGET_S"),
+        ({"jev_input_price_per_m": -1.0}, "TAPE_JEV_PRICE_PER_M"),
+    ],
+)
+def test_settings_built_in_code_name_both_field_and_variable(kwargs, variable):
+    (field_name,) = kwargs
+    with pytest.raises(ConfigError, match=rf"{field_name} \({variable}\)"):
+        Settings(**kwargs)
 
 
 def test_jev_price_may_be_zero(monkeypatch):

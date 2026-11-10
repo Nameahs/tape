@@ -16,9 +16,17 @@ class ConfigError(ValueError):
     """A setting is missing or invalid. The fix is in the environment, not the code."""
 
 
-def _float(name: str, default: float) -> float:
+def _float(name: str, default: float, *, minimum: float | None = None, positive: bool = False) -> float:
+    """A numeric setting. minimum is inclusive; positive rejects zero and below."""
     raw = os.environ.get(name, "").strip()
-    return _parse_float(name, raw) if raw else default
+    if not raw:
+        return default
+    value = _parse_float(name, raw)
+    if positive and value <= 0:
+        raise ConfigError(f"{name}: must be positive, got {value:g}")
+    if minimum is not None and value < minimum:
+        raise ConfigError(f"{name}: must be at least {minimum:g}, got {value:g}")
+    return value
 
 
 def _str(name: str, default: str) -> str:
@@ -218,14 +226,20 @@ class Settings:
             user_agent=_str("TAPE_USER_AGENT", cls.user_agent),
             jev_model=_str("TAPE_JEV_MODEL", cls.jev_model),
             max_chars=_int("TAPE_MAX_CHARS", cls.max_chars, minimum=1),
-            jev_input_price_per_m=_float("TAPE_JEV_PRICE_PER_M", cls.jev_input_price_per_m),
+            jev_input_price_per_m=_float("TAPE_JEV_PRICE_PER_M", cls.jev_input_price_per_m, minimum=0),
             jev_max_retries=_int("TAPE_JEV_MAX_RETRIES", cls.jev_max_retries, minimum=0),
-            jev_retry_budget_s=_float("TAPE_JEV_RETRY_BUDGET_S", cls.jev_retry_budget_s),
+            jev_retry_budget_s=_float("TAPE_JEV_RETRY_BUDGET_S", cls.jev_retry_budget_s, positive=True),
             thresholds=Thresholds.from_env(),
         )
 
     def __post_init__(self) -> None:
+        # from_env() already checks these against the variable; this catches Settings built in code.
         if self.jev_retry_budget_s <= 0:
-            raise ConfigError(f"jev_retry_budget_s must be positive, got {self.jev_retry_budget_s}")
+            raise ConfigError(
+                f"jev_retry_budget_s (TAPE_JEV_RETRY_BUDGET_S) must be positive, got {self.jev_retry_budget_s:g}"
+            )
         if self.jev_input_price_per_m < 0:
-            raise ConfigError(f"jev_input_price_per_m must not be negative, got {self.jev_input_price_per_m}")
+            raise ConfigError(
+                f"jev_input_price_per_m (TAPE_JEV_PRICE_PER_M) must not be negative, "
+                f"got {self.jev_input_price_per_m:g}"
+            )
