@@ -21,6 +21,16 @@ def _float(name: str, default: float) -> float:
     return _parse_float(name, raw) if raw else default
 
 
+def _str(name: str, default: str) -> str:
+    """A text setting, stripped. Set-but-blank counts as unset, as it does for the numeric ones.
+
+    Env templates often declare a variable with an empty value; taken as-is, TAPE_DB_PATH= would point
+    the store at the working directory and TAPE_JEV_MODEL= would fail every filing at Jev.
+    """
+    raw = os.environ.get(name, "").strip()
+    return raw or default
+
+
 def _int(name: str, default: int, minimum: int) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -204,9 +214,9 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         return cls(
-            db_path=Path(os.environ.get("TAPE_DB_PATH", str(cls.db_path))),
-            user_agent=os.environ.get("TAPE_USER_AGENT", cls.user_agent),
-            jev_model=os.environ.get("TAPE_JEV_MODEL", cls.jev_model),
+            db_path=Path(_str("TAPE_DB_PATH", str(cls.db_path))),
+            user_agent=_str("TAPE_USER_AGENT", cls.user_agent),
+            jev_model=_str("TAPE_JEV_MODEL", cls.jev_model),
             max_chars=_int("TAPE_MAX_CHARS", cls.max_chars, minimum=1),
             jev_input_price_per_m=_float("TAPE_JEV_PRICE_PER_M", cls.jev_input_price_per_m),
             jev_max_retries=_int("TAPE_JEV_MAX_RETRIES", cls.jev_max_retries, minimum=0),
