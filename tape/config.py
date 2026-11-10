@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 class ConfigError(ValueError):
@@ -96,7 +99,7 @@ class Thresholds:
 
     @classmethod
     def from_env(cls) -> Thresholds:
-        return cls(
+        t = cls(
             brief_now=_float("TAPE_BRIEF_NOW", cls.brief_now),
             brief_now_with_surprise=_float("TAPE_BRIEF_NOW_WITH_SURPRISE", cls.brief_now_with_surprise),
             surprise=_float("TAPE_SURPRISE", cls.surprise),
@@ -104,6 +107,41 @@ class Thresholds:
             boilerplate=_float("TAPE_BOILERPLATE", cls.boilerplate),
             overrides=_event_overrides(os.environ),
         )
+        for problem in t.unreachable():
+            log.warning("%s", problem)
+        return t
+
+    def unreachable(self) -> list[str]:
+        """Describe each routing rule these cutoffs leave dead, globally and per event.
+
+        route() checks brief_now first, so a digest bar at or above it empties the digest band, and a
+        surprise bar at or above it means the surprise rule never decides anything. Both are legal (a
+        digest bar at brief-now is how you turn the digest off), but done by accident they look like
+        a run of quiet days, so the caller warns rather than refuses. An event is only reported when
+        its own overrides cause the problem; one the global cutoffs already cause is reported once.
+        """
+        problems = _unreachable(self, "", set())
+        for event, values in sorted(self.overrides.items()):
+            problems += _unreachable(self.for_event(event), event, set(values))
+        return problems
+
+
+def _unreachable(t: Thresholds, event: str, overridden: set[str]) -> list[str]:
+    def var(cutoff: str) -> str:
+        name = f"TAPE_{cutoff.upper()}"
+        return f"{name}__{event.upper()}" if cutoff in overridden else name
+
+    where = f" for {event}" if event else ""
+    out = []
+    for cutoff, lost in (("digest", "no filing will be routed to the digest"),
+                         ("brief_now_with_surprise", "the surprise rule can never brief a filing")):
+        if event and not {cutoff, "brief_now"} & overridden:
+            continue
+        value = getattr(t, cutoff)
+        if value >= t.brief_now:
+            out.append(f"{var(cutoff)} ({value:g}) is at or above {var('brief_now')} ({t.brief_now:g}): "
+                       f"{lost}{where}")
+    return out
 
 
 def _cutoff_names() -> set[str]:

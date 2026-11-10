@@ -171,3 +171,44 @@ def test_require_contact_rejects_a_missing_contact(ua):
 
     with pytest.raises(ValueError, match="TAPE_USER_AGENT"):
         require_contact(ua)
+
+
+def test_sensible_thresholds_have_nothing_unreachable(monkeypatch, caplog):
+    monkeypatch.setenv("TAPE_BRIEF_NOW__EARNINGS_GUIDANCE", "4.5")
+    with caplog.at_level("WARNING", logger="tape.config"):
+        assert Thresholds.from_env().unreachable() == []
+    assert caplog.records == []
+
+
+def test_digest_above_brief_now_warns(monkeypatch, caplog):
+    monkeypatch.setenv("TAPE_DIGEST", "4.2")
+    with caplog.at_level("WARNING", logger="tape.config"):
+        t = Thresholds.from_env()
+    assert t.digest == 4.2  # a warning, not an error
+    assert [r.getMessage() for r in caplog.records] == [
+        "TAPE_DIGEST (4.2) is at or above TAPE_BRIEF_NOW (4): no filing will be routed to the digest"]
+
+
+def test_surprise_bar_above_brief_now_warns():
+    t = Thresholds(brief_now=3.5, brief_now_with_surprise=3.5)
+    assert t.unreachable() == [
+        "TAPE_BRIEF_NOW_WITH_SURPRISE (3.5) is at or above TAPE_BRIEF_NOW (3.5): "
+        "the surprise rule can never brief a filing"]
+
+
+def test_event_override_that_empties_a_band_names_the_event_variable():
+    t = Thresholds(overrides={"mna": {"digest": 4.5}, "earnings_guidance": {"brief_now": 2.5}})
+    assert t.unreachable() == [
+        "TAPE_DIGEST (2.75) is at or above TAPE_BRIEF_NOW__EARNINGS_GUIDANCE (2.5): "
+        "no filing will be routed to the digest for earnings_guidance",
+        "TAPE_BRIEF_NOW_WITH_SURPRISE (3) is at or above TAPE_BRIEF_NOW__EARNINGS_GUIDANCE (2.5): "
+        "the surprise rule can never brief a filing for earnings_guidance",
+        "TAPE_DIGEST__MNA (4.5) is at or above TAPE_BRIEF_NOW (4): "
+        "no filing will be routed to the digest for mna",
+    ]
+
+
+def test_global_problem_is_not_repeated_for_unrelated_event_overrides():
+    t = Thresholds(digest=4.0, overrides={"mna": {"boilerplate": 0.5}, "earnings_guidance": {"digest": 3.0}})
+    assert t.unreachable() == [
+        "TAPE_DIGEST (4) is at or above TAPE_BRIEF_NOW (4): no filing will be routed to the digest"]
