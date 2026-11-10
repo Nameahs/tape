@@ -52,7 +52,8 @@ doesn't need it. The other commands only read the store, or write a single brief
 | `TYPESAFE_API_KEY` | none | Jev API key |
 | `TAPE_USER_AGENT` | placeholder | Contact string sent to the SEC, e.g. `Tape you@example.com`; `run` and `backfill` refuse to start without an email in it |
 | `TAPE_DB_PATH` | `data/tape.db` | SQLite file; the cached SEC ticker map (refreshed daily) is kept in the same folder |
-| `TAPE_JEV_MODEL` | `jev-latest` | Jev model name |
+| `TAPE_JEV_MODEL` | `jev-latest` | Jev model name. Update `TAPE_JEV_PRICE_PER_M` when you change it if the new model is priced differently |
+| `TAPE_JEV_PRICE_PER_M` | `0.042` | USD per million input tokens, used for each score's `cost_usd` (output tokens aren't billed). Must not be negative; `0` is accepted. The cost is stored when a filing is scored, so a change applies to filings scored afterwards and existing rows keep their figure; `tape stats` and the dashboard add up the stored costs |
 | `TAPE_MAX_CHARS` | `12000` | Filing characters sent to Jev |
 | `TAPE_JEV_MAX_RETRIES` | `4` | Retries per filing on Jev timeouts, rate limits and 5xx errors; `0` disables |
 | `TAPE_JEV_RETRY_BUDGET_S` | `60` | Most seconds spent on one filing, retries included, before it waits for the next pass. A pass stops sending filings after 3 in a row fail this way, so an outage doesn't cost this much per filing |
