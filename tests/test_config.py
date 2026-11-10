@@ -17,6 +17,25 @@ def test_env_overrides(monkeypatch):
     assert s.thresholds.brief_now == 4.5
 
 
+@pytest.mark.parametrize("name, attr", [
+    ("TAPE_DB_PATH", "db_path"),
+    ("TAPE_USER_AGENT", "user_agent"),
+    ("TAPE_JEV_MODEL", "jev_model"),
+])
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_blank_string_setting_falls_back_to_default(monkeypatch, name, attr, raw):
+    monkeypatch.setenv(name, raw)
+    assert getattr(Settings.from_env(), attr) == getattr(Settings(), attr)
+
+
+def test_string_settings_are_stripped(monkeypatch):
+    monkeypatch.setenv("TAPE_JEV_MODEL", " jev-2 \n")
+    monkeypatch.setenv("TAPE_DB_PATH", " /tmp/x.db ")
+    s = Settings.from_env()
+    assert s.jev_model == "jev-2"
+    assert str(s.db_path) == "/tmp/x.db"
+
+
 def test_event_override_from_env(monkeypatch):
     monkeypatch.setenv("TAPE_BRIEF_NOW__EARNINGS_GUIDANCE", "4.5")
     monkeypatch.setenv("TAPE_DIGEST__ROUTINE_GOVERNANCE", "3.5")
