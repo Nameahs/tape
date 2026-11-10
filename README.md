@@ -59,6 +59,8 @@ doesn't need it. The other commands only read the store, or write a single brief
 | `TAPE_JEV_RETRY_BUDGET_S` | `60` | Most seconds spent on one filing, retries included, before it waits for the next pass. A pass stops sending filings after 3 in a row fail this way, so an outage doesn't cost this much per filing |
 | `TAPE_BRIEF_NOW`, `TAPE_DIGEST`, ... | see `tape/config.py` | Router thresholds. Materiality cutoffs must be 1 to 5, `TAPE_SURPRISE` and `TAPE_BOILERPLATE` 0 to 1. A `TAPE_DIGEST` or `TAPE_BRIEF_NOW_WITH_SURPRISE` at or above `TAPE_BRIEF_NOW` logs a warning, since that route or rule can never fire |
 | `TAPE_<THRESHOLD>__<EVENT>` | none | Per-event override, e.g. `TAPE_BRIEF_NOW__EARNINGS_GUIDANCE=4.5`; event labels are the keys of `EVENTS` in `tape/score.py` |
+| `TELEGRAM_BOT_TOKEN` | none | Bot token from @BotFather. Only read by `tape digest --send`, which exits 1 without sending if it or `TELEGRAM_CHAT_ID` is missing; the token is masked in logged errors. See [deploy/agent37.md](deploy/agent37.md#3-telegram) for sending from a script versus letting the agent message you |
+| `TELEGRAM_CHAT_ID` | none | Chat the digest is sent to (a negative id for a group). Only read by `tape digest --send` |
 
 ## Development
 
