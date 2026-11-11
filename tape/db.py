@@ -504,12 +504,16 @@ def _pending_briefs_query(since_iso: str | None) -> tuple[str, tuple[str, ...]]:
 
 
 def digest_since(conn: sqlite3.Connection, since_iso: str) -> list[sqlite3.Row]:
+    """Filings routed 'now' or 'digest' that EDGAR accepted at or after `since_iso`, most material first.
+    Jev's scores are often round numbers, so ties are broken newest first (compared as instants, since
+    acceptance times carry their own offsets) and then by accession number, which keeps the order stable.
+    """
     return conn.execute(
         """
         SELECT f.accession_no, f.ticker, f.company, f.url, s.materiality, s.event, s.direction
         FROM briefs b JOIN filings f USING (accession_no) JOIN scores s USING (accession_no)
         WHERE b.route IN ('now', 'digest') AND julianday(f.accepted_at) >= julianday(?)
-        ORDER BY s.materiality DESC
+        ORDER BY s.materiality DESC, julianday(f.accepted_at) DESC, f.accession_no
         """,
         (since_iso,),
     ).fetchall()

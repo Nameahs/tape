@@ -132,6 +132,26 @@ def test_digest_window_compares_instants_not_strings(conn):
     assert db.digest_since(conn, "2026-10-14T01:30:00+00:00") == []
 
 
+def test_digest_lists_tied_filings_newest_first(conn):
+    # Inserted out of acceptance order, all at the same materiality. The 21:00 ET filing (01:00Z next day)
+    # is the newest even though its string sorts before the 22:30Z one, and the two sharing an
+    # acceptance time fall back to accession number so the order is total.
+    times = {1: "2026-10-13T16:05:00-04:00", 2: "2026-10-13T21:00:00-04:00",
+             3: "2026-10-13T22:30:00+00:00", 4: "2026-10-13T16:05:00-04:00"}
+    for n in (3, 1, 4, 2):
+        f = make_filing(n, accepted_at=times[n])
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 3.0))
+        db.set_route(conn, f.accession_no, "digest")
+    higher = make_filing(5, accepted_at="2026-10-13T09:00:00-04:00")
+    db.upsert_filing(conn, higher)
+    db.upsert_score(conn, make_score(higher.accession_no, 4.5))
+    db.set_route(conn, higher.accession_no, "now")
+
+    order = [r["accession_no"] for r in db.digest_since(conn, "2026-10-13T00:00:00+00:00")]
+    assert order == [make_filing(n).accession_no for n in (5, 2, 3, 1, 4)]
+
+
 def test_new_database_is_at_latest_schema_version(conn):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(scores)")}
