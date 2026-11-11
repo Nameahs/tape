@@ -98,12 +98,14 @@ def _bar_chart(by_score: dict[str, dict[str, float]]) -> str:
 
 
 def _recent(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
+    # Ties broken like the digest, newest first then by accession number, so the 25-row cut through
+    # a run of equal scores keeps the same filings from one render to the next.
     return conn.execute(
         """
         SELECT f.ticker, f.company, f.url, f.accepted_at, s.materiality, s.event, s.direction, b.route
         FROM filings f JOIN scores s USING (accession_no) LEFT JOIN briefs b USING (accession_no)
         WHERE julianday(f.accepted_at) >= julianday(?)
-        ORDER BY s.materiality DESC LIMIT 25
+        ORDER BY s.materiality DESC, julianday(f.accepted_at) DESC, f.accession_no LIMIT 25
         """,
         (since,),
     ).fetchall()
