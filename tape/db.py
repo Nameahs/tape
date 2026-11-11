@@ -356,6 +356,10 @@ def finish_run(conn: sqlite3.Connection, run_id: int, *, discovered: int = 0, fe
 def unscored(conn: sqlite3.Connection, max_attempts: int = MAX_SCORE_ATTEMPTS) -> list[sqlite3.Row]:
     """Filings with text that Jev hasn't scored yet. Blank text (stored before fetch rejected it) is skipped,
     and so is any filing that has already failed `max_attempts` times (see given_up()).
+
+    Newest first, compared as instants, so a backlog left by an interrupted backfill or a long Jev outage
+    is scored after the filings that just came in rather than ahead of them: those are the ones that may
+    route 'now', and if Jev fails again partway through the pass they are not the ones left unsent.
     """
     return conn.execute(
         """
@@ -363,7 +367,7 @@ def unscored(conn: sqlite3.Connection, max_attempts: int = MAX_SCORE_ATTEMPTS) -
         LEFT JOIN score_failures sf USING (accession_no)
         WHERE s.accession_no IS NULL AND trim(COALESCE(f.clean_text, ''), ' ' || char(9, 10, 13)) != ''
           AND COALESCE(sf.attempts, 0) < ?
-        ORDER BY f.accepted_at
+        ORDER BY julianday(f.accepted_at) DESC, f.accession_no
         """,
         (max_attempts,),
     ).fetchall()
