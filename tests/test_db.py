@@ -89,6 +89,27 @@ def test_pending_briefs_since_skips_old_filings(conn):
     assert db.pending_briefs(conn, "2026-10-13T20:05:01+00:00") == []
 
 
+def test_pending_briefs_lists_tied_filings_newest_first(conn):
+    # Same shape as the digest tie test: equal materiality inserted out of acceptance order, one
+    # filing whose ET time is newer than a UTC time that sorts after it as a string, and two sharing
+    # an acceptance time that fall back to accession number.
+    times = {1: "2026-10-13T16:05:00-04:00", 2: "2026-10-13T21:00:00-04:00",
+             3: "2026-10-13T22:30:00+00:00", 4: "2026-10-13T16:05:00-04:00"}
+    for n in (3, 1, 4, 2):
+        f = make_filing(n, accepted_at=times[n])
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 4.0))
+        db.set_route(conn, f.accession_no, "now")
+    higher = make_filing(5, accepted_at="2026-10-13T09:00:00-04:00")
+    db.upsert_filing(conn, higher)
+    db.upsert_score(conn, make_score(higher.accession_no, 4.8))
+    db.set_route(conn, higher.accession_no, "now")
+
+    expected = [make_filing(n).accession_no for n in (5, 2, 3, 1, 4)]
+    assert [r["accession_no"] for r in db.pending_briefs(conn)] == expected
+    assert [r["accession_no"] for r in db.pending_briefs(conn, "2026-10-13T00:00:00+00:00")] == expected
+
+
 def test_pending_briefs_since_seeks_on_the_julianday_index(conn):
     # A history of old 'now' routes (backfills, reroutes) with a few recent ones. With statistics in
     # place the windowed query should start from the recent filings, not walk every 'now' brief.
@@ -106,7 +127,7 @@ def test_pending_briefs_since_seeks_on_the_julianday_index(conn):
 
 def test_pending_briefs_without_since_has_no_date_filter():
     sql, params = db._pending_briefs_query(None)
-    assert "julianday" not in sql and params == ()
+    assert "julianday(?)" not in sql and params == ()
 
 
 def test_save_brief_requires_route(conn):
