@@ -8,6 +8,7 @@ from tape import db
 from tape.evaluate import (
     ET,
     MIN_OUTCOMES,
+    UNPRICED_SQL,
     NotEnoughOutcomes,
     PricesUnavailable,
     bootstrap_gap_ci,
@@ -131,6 +132,31 @@ def test_compute_outcomes_longer_lookback_reaches_old_filings(conn):
     later = date(2026, 12, 31)
     assert compute_outcomes(conn, FakePrices(), today=later) == 0
     assert compute_outcomes(conn, FakePrices(), lookback_days=120, today=later) == 1
+
+
+@pytest.mark.parametrize(
+    ("accepted", "priced"),
+    [
+        # The window starts at midnight Eastern on the cutoff day (Sep 14 for a 30-day lookback from Oct 14),
+        # whatever offset the timestamp was stored with.
+        ("2026-09-13T23:59:59-04:00", False),
+        ("2026-09-14T03:59:59+00:00", False),  # still Sep 13 in New York
+        ("2026-09-14T00:00:00-04:00", True),
+        ("2026-09-14T04:00:00+00:00", True),
+    ],
+)
+def test_compute_outcomes_window_starts_at_midnight_eastern(conn, accepted, priced):
+    f = make_filing(1, accepted_at=accepted)
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no))
+    prices = RecordingPrices()
+    compute_outcomes(conn, prices, lookback_days=30, today=TODAY)
+    assert bool(prices.calls) is priced
+
+
+def test_compute_outcomes_window_query_uses_the_accepted_index(conn):
+    plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + UNPRICED_SQL, ("2026-09-14",)))
+    assert "idx_filings_accepted_jd" in plan
 
 
 class BrokenPrices:

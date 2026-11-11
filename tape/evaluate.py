@@ -38,6 +38,16 @@ PRICE_LOOKBACK_DAYS = 30
 MIN_OUTCOMES = 20  # below this the bucket means and the shuffled baseline are mostly noise
 
 
+# Scored filings with a ticker and no outcome, accepted at or after an instant. Unpriceable filings
+# never leave this set, so the bound is applied in SQL on idx_filings_accepted_jd rather than after
+# reading the whole history; the WHERE clause must keep the exact julianday(accepted_at) expression.
+UNPRICED_SQL = """
+SELECT f.accession_no, f.ticker, f.accepted_at FROM filings f
+JOIN scores s USING (accession_no) LEFT JOIN outcomes o USING (accession_no)
+WHERE julianday(f.accepted_at) >= julianday(?) AND o.accession_no IS NULL AND f.ticker IS NOT NULL
+"""
+
+
 class NotEnoughOutcomes(ValueError):
     """Too few filings have next-day prices to evaluate yet; normal for the first weeks after deploy."""
 
@@ -102,14 +112,8 @@ def compute_outcomes(conn: sqlite3.Connection, prices: PriceSource,
     """
     now = (now or datetime.now(ET)).astimezone(ET)
     cutoff = (today or now.date()) - timedelta(days=lookback_days)
-    rows = conn.execute(
-        """
-        SELECT f.accession_no, f.ticker, f.accepted_at FROM filings f
-        JOIN scores s USING (accession_no) LEFT JOIN outcomes o USING (accession_no)
-        WHERE o.accession_no IS NULL AND f.ticker IS NOT NULL
-        """
-    ).fetchall()
-    rows = [r for r in rows if datetime.fromisoformat(r["accepted_at"]).astimezone(ET).date() >= cutoff]
+    since = datetime.combine(cutoff, time(), ET).isoformat()
+    rows = conn.execute(UNPRICED_SQL, (since,)).fetchall()
     if not rows:
         return 0
     first = min(datetime.fromisoformat(r["accepted_at"]).date() for r in rows) - timedelta(days=7)
