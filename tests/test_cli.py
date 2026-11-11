@@ -232,6 +232,21 @@ def test_digest_send_without_credentials(tmp_path, monkeypatch, capsys, caplog):
     assert "TELEGRAM_CHAT_ID not set" in caplog.text
 
 
+@pytest.mark.parametrize("token", ["", "   ", "\n"])
+def test_digest_send_treats_blank_token_as_unset(tmp_path, monkeypatch, capsys, caplog, token):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    _seed(path)
+    called = []
+    monkeypatch.setattr("tape.notify.send_telegram", lambda text: called.append(text))
+
+    assert main(["digest", "--send"]) == 1
+    assert called == []
+    assert "TELEGRAM_BOT_TOKEN not set" in caplog.text
+
+
 @pytest.mark.parametrize("text", ["", "  \n\t"])
 def test_brief_rejects_empty_text(tmp_path, monkeypatch, capsys, text):
     path = tmp_path / "t.db"
