@@ -233,3 +233,13 @@ def test_bootstrap_ci_is_deterministic_and_handles_zero_moves():
     assert bootstrap_gap_ci(df["materiality"], df["abs_ar"]) == bootstrap_gap_ci(df["materiality"], df["abs_ar"])
     lo, hi = bootstrap_gap_ci(df["materiality"], pd.Series(0.0, index=df.index))
     assert np.isnan(lo) and np.isnan(hi)
+
+
+def test_evaluate_does_not_depend_on_row_order_when_scores_tie():
+    # Whole-number scores, so every cut (top 10%, bottom 50%, Jev's top k, each day's top 10)
+    # runs through a block of tied filings.
+    df = _frame(signal=1.0, n=200)
+    df["materiality"] = df["materiality"].round()
+    shuffled = df.sample(frac=1, random_state=3)
+    assert evaluate(shuffled).to_json() == evaluate(df).to_json()
+    assert evaluate(df.iloc[::-1]).to_json() == evaluate(df).to_json()

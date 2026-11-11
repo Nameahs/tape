@@ -191,8 +191,15 @@ class Report:
         return json.dumps(asdict(self), indent=2)
 
 
+def _ranked(score: pd.Series) -> pd.Index:
+    """Index of `score` highest first. Stable, so tied filings keep their row order and every cut
+    through a block of equal scores (top 10%, bottom 50%, Jev's top k) picks the same filings.
+    """
+    return score.sort_values(ascending=False, kind="stable").index
+
+
 def _gap(score: pd.Series, move: pd.Series) -> float:
-    order = score.sort_values(ascending=False).index
+    order = _ranked(score)
     n = len(order)
     top = move.loc[order[: max(1, n // 10)]].mean()
     bottom = move.loc[order[n // 2:]].mean()
@@ -234,14 +241,16 @@ def _lift(flag: pd.Series, move: pd.Series) -> float:
 def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
     if len(df) < MIN_OUTCOMES:
         raise NotEnoughOutcomes(len(df))
-    df = df.reset_index(drop=True)
+    # A fixed row order, so the tie-breaking in the cuts below (and the shuffled baseline) doesn't
+    # depend on how SQLite happened to return the rows.
+    df = df.sort_values("accession_no", kind="stable").reset_index(drop=True)
     score, move = df["materiality"], df["abs_ar"]
 
     bucket = score.round().clip(1, 5).astype(int)
     by_score = {
         str(k): {"n": int(len(g)), "mean_abs_ar": float(g.mean())} for k, g in move.groupby(bucket)
     }
-    order = score.sort_values(ascending=False).index
+    order = _ranked(score)
     n = len(df)
 
     daily_hits = []
