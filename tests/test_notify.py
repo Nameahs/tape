@@ -39,6 +39,16 @@ def test_send_telegram():
     assert body == {"chat_id": "42", "text": "hello\nworld", "disable_web_page_preview": True}
 
 
+@respx.mock
+def test_send_telegram_strips_whitespace_from_env_credentials(monkeypatch):
+    # A token read with $(cat token.txt) keeps its trailing newline.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:ABC\n")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", " -10042 ")
+    route = respx.post(API.format(token="123:ABC")).respond(200, json={"ok": True})
+    send_telegram("hi", client=httpx.Client())
+    assert json.loads(route.calls[0].request.content)["chat_id"] == "-10042"
+
+
 @pytest.fixture
 def sleeps(monkeypatch):
     waited: list[float] = []

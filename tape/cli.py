@@ -162,7 +162,8 @@ def cmd_digest(args, settings, conn) -> int:
 
         from tape.notify import send_telegram
 
-        missing = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.environ.get(k)]
+        # A secret read with $(cat file) keeps its trailing newline, and a blank value is as good as unset.
+        missing = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.environ.get(k, "").strip()]
         if missing:
             log.error("digest not sent: %s not set", " and ".join(missing))
             return 1

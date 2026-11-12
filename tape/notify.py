@@ -51,8 +51,10 @@ def chunks(text: str, limit: int = LIMIT) -> list[str]:
 
 def send_telegram(text: str, token: str | None = None, chat_id: str | None = None,
                   client: httpx.Client | None = None) -> int:
-    token = token or os.environ["TELEGRAM_BOT_TOKEN"]
-    chat_id = chat_id or os.environ["TELEGRAM_CHAT_ID"]
+    # Surrounding whitespace would end up in the URL path and the chat id, and Telegram answers that with
+    # a 404 or "chat not found" that looks like a revoked token or a wrong chat.
+    token = (token or os.environ["TELEGRAM_BOT_TOKEN"]).strip()
+    chat_id = (chat_id or os.environ["TELEGRAM_CHAT_ID"]).strip()
     owned = client is None
     http = httpx.Client(timeout=15.0) if client is None else client
     try:
