@@ -277,7 +277,7 @@ def _retry_delay(resp: httpx.Response, attempt: int) -> float:
 
 def _read_json(path: Path) -> object | None:
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 

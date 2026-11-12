@@ -45,3 +45,25 @@ def test_write_atomic_writes_utf8_whatever_the_locale(tmp_path):
     result = run_in_ascii_locale(code, str(path))
     assert result.returncode == 0, result.stderr
     assert path.read_bytes() == "Société Générale — 8-K".encode()
+
+
+def test_ticker_cache_with_non_ascii_titles_is_read_under_an_ascii_locale(tmp_path):
+    # SEC's company_tickers.json carries raw UTF-8 titles. Decoding it as ASCII raised a ValueError the cache
+    # reader treats as "no cache", so every pass downloaded the ticker file again.
+    path = tmp_path / "tickers.json"
+    path.write_bytes('{"0": {"cik_str": 1234, "ticker": "SGE", "title": "Société Générale"}}'.encode())
+    code = "import sys; from pathlib import Path; from tape.edgar import _cached_tickers; " \
+           "print(_cached_tickers(Path(sys.argv[1])))"
+    result = run_in_ascii_locale(code, str(path))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "{'0000001234': 'SGE'}"
+
+
+def test_eval_report_with_non_ascii_text_is_read_under_an_ascii_locale(tmp_path):
+    path = tmp_path / "eval.json"
+    path.write_bytes('{"note": "Société — n/a"}'.encode())
+    code = "import sys; from pathlib import Path; from tape.dashboard import _read_report; " \
+           "print(_read_report(Path(sys.argv[1])) is not None)"
+    result = run_in_ascii_locale(code, str(path))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True", result.stderr

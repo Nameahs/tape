@@ -264,7 +264,7 @@ def write(conn: sqlite3.Connection, out: Path, report_path: Path | None) -> Path
 def _read_report(path: Path) -> dict | None:
     """The report, or None if it can't be used: one bad file shouldn't take the rest of the page down."""
     try:
-        report = json.loads(path.read_text())
+        report = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         log.warning("ignoring unreadable eval report %s: %s", path, e)
         return None
