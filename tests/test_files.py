@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -24,3 +26,22 @@ def test_failed_write_keeps_previous_file(tmp_path, monkeypatch):
         write_atomic(path, "new")
     assert path.read_text() == "old"
     assert os.listdir(tmp_path) == ["b.txt"]
+
+
+def run_in_ascii_locale(code: str, *args: str) -> subprocess.CompletedProcess:
+    """Run `code` in a fresh interpreter whose locale encoding is ASCII, the way a bare scheduled job can be."""
+    env = {**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
+    probe = subprocess.run([sys.executable, "-c", "import locale; print(locale.getencoding())"],
+                           env=env, capture_output=True, text=True, check=True)
+    if "utf" in probe.stdout.lower():
+        pytest.skip("this platform has no non-UTF-8 C locale")
+    return subprocess.run([sys.executable, "-c", code, *args], env=env, capture_output=True, text=True)
+
+
+def test_write_atomic_writes_utf8_whatever_the_locale(tmp_path):
+    path = tmp_path / "page.html"
+    code = "import sys; from pathlib import Path; from tape.files import write_atomic; " \
+           "write_atomic(Path(sys.argv[1]), 'Soci\\u00e9t\\u00e9 G\\u00e9n\\u00e9rale \\u2014 8-K')"
+    result = run_in_ascii_locale(code, str(path))
+    assert result.returncode == 0, result.stderr
+    assert path.read_bytes() == "Société Générale — 8-K".encode()
