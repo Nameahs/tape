@@ -55,6 +55,18 @@ def test_unscored_skips_missing_and_blank_text(conn):
     assert [r["accession_no"] for r in db.unscored(conn)] == [keep.accession_no]
 
 
+def test_unscored_queues_newest_filings_first(conn):
+    # A backlog from a cut-short backfill, inserted out of order, plus today's filings. The ET filing
+    # at 01:45-04:00 is 30 minutes before the one at 01:15-05:00 across the DST change though its
+    # string sorts after it; the two at 16:05 ET fall back to accession number.
+    times = {1: "2026-09-02T10:00:00-04:00", 2: "2026-11-01T01:45:00-04:00", 3: "2026-11-01T01:15:00-05:00",
+             4: "2026-11-11T16:05:00-05:00", 5: "2026-11-11T16:05:00-05:00", 6: "2026-11-11T21:30:00+00:00"}
+    for n in (2, 5, 1, 6, 3, 4):
+        db.upsert_filing(conn, make_filing(n, accepted_at=times[n]))
+
+    assert [r["accession_no"] for r in db.unscored(conn)] == [make_filing(n).accession_no for n in (6, 4, 5, 3, 2, 1)]
+
+
 def test_unscored_and_pending_flow(conn):
     a, b = make_filing(1), make_filing(2)
     db.upsert_filing(conn, a)
