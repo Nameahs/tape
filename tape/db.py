@@ -480,6 +480,7 @@ def pending_briefs(conn: sqlite3.Connection, since_iso: str | None = None) -> li
     """Filings routed 'now' with no brief yet (a blank brief_text, saved before briefs were checked,
     counts as none). With `since_iso`, only those EDGAR accepted at or after it:
     a backfill or reroute marks old filings 'now' too, and those are not news any more.
+    Most material first, ties newest first and then by accession number, as in `digest_since`.
     """
     return conn.execute(*_pending_briefs_query(since_iso)).fetchall()
 
@@ -498,7 +499,7 @@ def _pending_briefs_query(since_iso: str | None) -> tuple[str, tuple[str, ...]]:
         FROM briefs b JOIN filings f USING (accession_no) JOIN scores s USING (accession_no)
         WHERE b.route = 'now' AND trim(COALESCE(b.brief_text, ''), ' ' || char(9, 10, 13)) = ''
           {since_clause}
-        ORDER BY s.materiality DESC
+        ORDER BY s.materiality DESC, julianday(f.accepted_at) DESC, f.accession_no
         """
     return sql, params
 

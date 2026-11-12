@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import pytest
 
 from tape import db
-from tape.dashboard import DAILY_SQL, SPEND_SQL, _daily, _daily_chart, build, write
+from tape.dashboard import DAILY_SQL, SPEND_SQL, _daily, _daily_chart, _recent, build, write
 from tests.conftest import make_filing, make_score
 
 NOW = datetime(2026, 10, 13, 22, 0, tzinfo=UTC)
@@ -175,3 +175,24 @@ def test_spend_query_seeks_on_the_scored_at_index(conn):
     window = ("2026-10-12T22:00:00+00:00", "2026-10-13T22:00:00+00:00")
     plan = " ".join(r["detail"] for r in conn.execute("EXPLAIN QUERY PLAN " + SPEND_SQL, window))
     assert "USING INDEX idx_scores_scored_jd" in plan
+
+
+def test_recent_table_cuts_score_ties_newest_first(conn):
+    # 22 filings above the tie, then six tied at 3.0 inserted out of acceptance order: only three fit
+    # under the 25-row limit, and they should be the three newest. Filings 23 and 24 share an
+    # acceptance time and fall back to accession number.
+    for n in range(1, 23):
+        f = make_filing(n, company=f"Co {n}", accepted_at=f"2026-10-13T{n - 1:02d}:00:00+00:00")
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 4.5))
+    tied = {23: "2026-10-13T12:00:00-04:00", 24: "2026-10-13T12:00:00-04:00", 25: "2026-10-13T08:00:00-04:00",
+            26: "2026-10-13T00:30:00+00:00", 27: "2026-10-12T21:00:00-04:00", 28: "2026-10-13T13:00:00-04:00"}
+    for n in (25, 24, 27, 28, 26, 23):
+        f = make_filing(n, company=f"Co {n}", accepted_at=tied[n])
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 3.0))
+
+    rows = _recent(conn, "2026-10-12T22:00:00+00:00")
+    assert len(rows) == 25
+    assert [r["company"] for r in rows[22:]] == ["Co 28", "Co 23", "Co 24"]
+    assert [r["company"] for r in rows[:22]] == [f"Co {n}" for n in range(22, 0, -1)]
