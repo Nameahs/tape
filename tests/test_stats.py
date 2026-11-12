@@ -70,8 +70,26 @@ def test_format_stats(conn):
     lines = out.splitlines()
     assert lines[0].split() == ["day", "filings", "scored", "now", "digest", "log", "cost"]
     assert lines[2].split() == ["2026-10-16", "1", "1", "1", "0", "0", "$0.01"]
-    assert lines[3].split() == ["total", "1", "1"]
+    assert lines[3].split() == ["total", "1", "1", "1", "0", "0"]
     assert lines[-1] == "Jev spend in window: $0.01 over 1 calls"
+
+
+def test_format_stats_totals_each_route_across_days(conn):
+    _add(conn, 1, "2026-10-15T09:30:00-04:00", score=4.5, route="now", cost=0.01)
+    _add(conn, 2, "2026-10-16T09:30:00-04:00", score=4.6, route="now", cost=0.01)
+    _add(conn, 3, "2026-10-16T10:00:00-04:00", score=3.5, route="digest", cost=0.01)
+    _add(conn, 4, "2026-10-16T11:00:00-04:00", score=1.0, route="log", cost=0.01)
+    _add(conn, 5, "2026-10-16T12:00:00-04:00")  # unscored: counted as a filing, no route
+
+    lines = format_stats(collect(conn, days=2, today=TODAY)).splitlines()
+
+    header, total = lines[0], lines[3]
+    assert total.split() == ["total", "5", "4", "2", "1", "1"]
+    # Each total sits right-aligned under its column header, like the per-day rows above it.
+    for col, value in [("now", "2"), ("digest", "1"), ("log", "1")]:
+        end = header.index(col) + len(col)
+        assert total[:end].rstrip().endswith(value)
+        assert lines[2][:end].rstrip()[-1].isdigit()
 
 
 def test_counts_filings_scoring_gave_up_on(conn):

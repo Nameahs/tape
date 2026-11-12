@@ -109,7 +109,12 @@ def format_stats(s: Stats) -> str:
         )
     total_filings = sum(d.filings for d in s.days)
     total_scored = sum(d.scored for d in s.days)
-    lines.append(f"{'total':<10}  {total_filings:>7,}  {total_scored:>6,}")
+    totals = {r: sum(d.routes[r] for d in s.days) for r in ROUTES}
+    # Cost stays blank: per-filing-day cost misses backfill spend, and the window spend line below is the true total.
+    lines.append(
+        f"{'total':<10}  {total_filings:>7,}  {total_scored:>6,}  {totals['now']:>4,}  "
+        f"{totals['digest']:>6,}  {totals['log']:>5,}"
+    )
     lines.append(f"Jev spend in window: ${s.spend_usd:.2f} over {s.calls:,} calls")
     if s.blocked_runs:
         lines.append(f"EDGAR rate-limited {s.blocked_runs:,} of {s.runs:,} runs in window")
