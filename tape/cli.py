@@ -189,7 +189,7 @@ def format_given_up(score_rows, fetch_rows) -> str:
     for kind, rows in (("score", score_rows), ("fetch", fetch_rows)):
         for r in rows:
             lines.append(f"{kind}  {r['accession_no']}  attempts={r['attempts']}  {r['last_attempt_at']}  "
-                         f"{r['last_error']}")
+                         f"{db.one_line(r['last_error'])}")
     return "\n".join(lines)
 
 

@@ -442,6 +442,25 @@ def test_fetch_failures_count_up_to_the_limit(conn):
     assert db.fetch_given_up(conn, []) == []
 
 
+HTTPX_404 = ("HTTPStatusError: Client error '404 Not Found' for url 'https://www.sec.gov/x'\n"
+             "For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404")
+
+
+def test_failures_store_the_error_on_one_line_and_capped(conn):
+    f = make_filing(1)
+    db.upsert_filing(conn, f)
+    db.record_score_failure(conn, f.accession_no, HTTPX_404)
+    db.record_fetch_failure(conn, f.accession_no, "RuntimeError:\t" + "x " * 400)
+
+    [score_error] = conn.execute("SELECT last_error FROM score_failures").fetchone()
+    assert score_error == ("HTTPStatusError: Client error '404 Not Found' for url 'https://www.sec.gov/x' "
+                           "For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404")
+    [fetch_error] = conn.execute("SELECT last_error FROM fetch_failures").fetchone()
+    assert fetch_error.startswith("RuntimeError: x x")
+    assert len(fetch_error) == db.MAX_ERROR_CHARS
+    assert "\t" not in fetch_error and "\n" not in fetch_error
+
+
 def test_clear_fetch_failure_and_stored_filings_are_not_given_up(conn):
     gone, stored = "0000000001-26-000009", make_filing(1)
     for _ in range(db.MAX_FETCH_ATTEMPTS):
