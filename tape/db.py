@@ -170,6 +170,9 @@ MAX_SCORE_ATTEMPTS = 3
 # for hours, so this caps the cost at a few requests instead of one round per pass.
 MAX_FETCH_ATTEMPTS = 3
 
+# Longest error text kept per failure; enough for the exception type and its message.
+MAX_ERROR_CHARS = 500
+
 
 @dataclass(frozen=True)
 class Filing:
@@ -321,6 +324,14 @@ def save_brief(conn: sqlite3.Connection, accession_no: str, text: str, sent_at: 
         raise KeyError(f"no routed filing {accession_no}")
 
 
+def one_line(text: str) -> str:
+    """Collapse runs of whitespace, newlines included, to single spaces.
+
+    `tape retry` prints one row per failure, and some exception messages (httpx's HTTPStatusError) span lines.
+    """
+    return " ".join(text.split())
+
+
 def _utc_now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -387,7 +398,7 @@ def record_score_failure(conn: sqlite3.Connection, accession_no: str, error: str
             last_attempt_at = excluded.last_attempt_at
         RETURNING attempts
         """,
-        (accession_no, int(count), error, at or _utc_now()),
+        (accession_no, int(count), one_line(error)[:MAX_ERROR_CHARS], at or _utc_now()),
     ).fetchone()
     return int(row["attempts"])
 
@@ -437,7 +448,7 @@ def record_fetch_failure(conn: sqlite3.Connection, accession_no: str, error: str
             attempts = attempts + 1, last_error = excluded.last_error, last_attempt_at = excluded.last_attempt_at
         RETURNING attempts
         """,
-        (accession_no, error, at or _utc_now()),
+        (accession_no, one_line(error)[:MAX_ERROR_CHARS], at or _utc_now()),
     ).fetchone()
     return int(row["attempts"])
 

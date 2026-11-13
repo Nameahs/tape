@@ -789,6 +789,22 @@ def test_retry_lists_given_up_filings_without_clearing_them(tmp_path, monkeypatc
     assert _counts(path) == (1, 1)
 
 
+def test_retry_prints_each_given_up_filing_on_one_line(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    stuck, gone = _given_up_store(path)
+    with closing(db.connect(path)) as conn, conn:
+        # Stored before errors were collapsed on the way in.
+        conn.execute("UPDATE fetch_failures SET last_error = ?",
+                     ("HTTPStatusError: Client error '404 Not Found'\nFor more information check: https://x",))
+
+    assert main(["retry"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert len(lines) == 2
+    assert lines[1] == (f"fetch  {gone}  attempts=3  2026-11-05T16:00:00Z  "
+                        "HTTPStatusError: Client error '404 Not Found' For more information check: https://x")
+
+
 def test_retry_with_nothing_given_up(tmp_path, monkeypatch, capsys):
     path = tmp_path / "t.db"
     monkeypatch.setenv("TAPE_DB_PATH", str(path))

@@ -133,7 +133,7 @@ def ingest(conn: sqlite3.Connection, edgar: Edgar, refs: Iterable[FilingRef], se
                 continue
             outages_in_a_row = 0
             with db.transaction(conn):
-                attempts = db.record_fetch_failure(conn, ref.accession_no, f"{type(e).__name__}: {e}"[:500])
+                attempts = db.record_fetch_failure(conn, ref.accession_no, f"{type(e).__name__}: {e}")
             if isinstance(e, (EmptyFilingError, IndexPageError)):
                 log.warning("skipped: %s", e)
             else:
@@ -178,7 +178,7 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
     def failed(row, exc: Exception) -> None:
         outage = is_outage(exc)
         with db.transaction(conn):
-            attempts = db.record_score_failure(conn, row["accession_no"], f"{type(exc).__name__}: {exc}"[:500],
+            attempts = db.record_score_failure(conn, row["accession_no"], f"{type(exc).__name__}: {exc}",
                                                count=not outage)
         if outage:
             outages.append(exc)
