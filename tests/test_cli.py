@@ -836,12 +836,14 @@ def test_retry_one_accession(tmp_path, monkeypatch, capsys):
     assert _counts(path) == (1, 0)
 
 
-def test_retry_unknown_accession_is_an_error(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("flags", [[], ["--score"], ["--fetch"], ["--score", "--fetch"]])
+def test_retry_unknown_accession_is_an_error(flags, tmp_path, monkeypatch, capsys):
     path = tmp_path / "t.db"
     monkeypatch.setenv("TAPE_DB_PATH", str(path))
     _given_up_store(path)
-    assert main(["retry", "--score", "--accession", "0000000000-00-000000"]) == 1
-    err = capsys.readouterr().err
+    assert main(["retry", *flags, "--accession", "0000000000-00-000000"]) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
     assert err.startswith("error: 0000000000-00-000000 is not a given-up filing")
     assert _counts(path) == (1, 1)
 

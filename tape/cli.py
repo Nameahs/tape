@@ -200,6 +200,10 @@ def cmd_retry(args, settings, conn) -> int:
     if not (args.score or args.fetch):
         score_rows = [r for r in db.given_up(conn) if args.accession in (None, r["accession_no"])]
         fetch_rows = db.fetch_given_up(conn, None if args.accession is None else [args.accession])
+        if args.accession is not None and not (score_rows or fetch_rows):
+            # "nothing given up" would read as a clean store; other filings may well be given up.
+            print(f"error: {args.accession} is not a given-up filing", file=sys.stderr)
+            return 1
         print(format_given_up(score_rows, fetch_rows))
         return 0
     with db.transaction(conn):
