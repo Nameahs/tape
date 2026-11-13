@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 
 import httpx
 import pytest
@@ -183,6 +184,63 @@ def test_digest_lists_tied_filings_newest_first(conn):
 
     order = [r["accession_no"] for r in db.digest_since(conn, "2026-10-13T00:00:00+00:00")]
     assert order == [make_filing(n).accession_no for n in (5, 2, 3, 1, 4)]
+
+
+def _routed(conn, n, accepted_at, route="digest", materiality=3.0):
+    f = make_filing(n, accepted_at=accepted_at)
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no, materiality))
+    db.set_route(conn, f.accession_no, route)
+    return f.accession_no
+
+
+def test_digest_leaves_out_filings_an_earlier_digest_reported(conn):
+    reported = _routed(conn, 1, "2026-11-12T15:00:00-05:00")
+    late = _routed(conn, 2, "2026-11-12T17:00:00-05:00", route="now")
+    since = "2026-11-10T00:00:00+00:00"
+    assert db.mark_digested(conn, [reported], "2026-11-12T23:00:00Z") == 1
+    assert [r["accession_no"] for r in db.digest_since(conn, since)] == [late]
+
+
+def test_filing_routed_after_a_digest_is_in_the_next_one_exactly_once(conn):
+    # Accepted at 5:00 pm ET Thursday, before the 6:00 pm digest, but only routed by Friday's backfill.
+    first = _routed(conn, 1, "2026-11-12T14:00:00-05:00")
+    since = "2026-11-09T23:00:00+00:00"
+    shown = [r["accession_no"] for r in db.digest_since(conn, since)]
+    assert shown == [first]
+    db.mark_digested(conn, shown, "2026-11-12T23:00:00Z")
+
+    late = _routed(conn, 2, "2026-11-12T17:00:00-05:00")
+    shown = [r["accession_no"] for r in db.digest_since(conn, since)]
+    assert shown == [late]
+    db.mark_digested(conn, shown, "2026-11-13T23:00:00Z")
+    assert db.digest_since(conn, since) == []
+
+
+def test_digest_lookback_still_excludes_old_unreported_filings(conn):
+    _routed(conn, 1, "2026-08-03T10:00:00-04:00")  # a backfill routing a filing from months ago
+    assert db.digest_since(conn, "2026-11-09T00:00:00+00:00") == []
+
+
+def test_mark_digested_keeps_the_first_time_and_ignores_unknown_accessions(conn):
+    acc = _routed(conn, 1, "2026-11-12T15:00:00-05:00")
+    assert db.mark_digested(conn, [acc, "nope"], "2026-11-12T23:00:00Z") == 1
+    assert db.mark_digested(conn, [acc], "2026-11-13T23:00:00Z") == 0
+    row = conn.execute("SELECT digested_at FROM briefs WHERE accession_no = ?", (acc,)).fetchone()
+    assert row["digested_at"] == "2026-11-12T23:00:00Z"
+
+
+def test_migration_leaves_existing_routes_unreported(tmp_path):
+    path = tmp_path / "old.db"
+    with closing(db.connect(path)) as conn:
+        acc = _routed(conn, 1, "2026-11-12T15:00:00-05:00")
+        conn.commit()
+    with closing(sqlite3.connect(path)) as old:
+        # What a store at version 11 looked like: briefs without digested_at.
+        old.executescript("ALTER TABLE briefs DROP COLUMN digested_at; PRAGMA user_version = 11;")
+    with closing(db.connect(path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+        assert [r["accession_no"] for r in db.digest_since(conn, "2026-11-10T00:00:00+00:00")] == [acc]
 
 
 def test_new_database_is_at_latest_schema_version(conn):

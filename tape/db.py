@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -159,6 +159,12 @@ MIGRATIONS: list[str] = [
         OR last_error LIKE 'HTTPStatusError: Server error ''502 %'
         OR last_error LIKE 'HTTPStatusError: Server error ''503 %'
         OR last_error LIKE 'HTTPStatusError: Server error ''504 %';
+    """,
+    # 12: when a routed filing went out in an evening digest. The digest used to be a window on acceptance time,
+    # so a filing accepted before one digest but routed after it (a backfill, a Friday evening pass, a Jev
+    # outage) fell outside the next window and was never reported. NULL means not reported yet.
+    """
+    ALTER TABLE briefs ADD COLUMN digested_at TEXT;
     """,
 ]
 
@@ -520,16 +526,31 @@ def _pending_briefs_query(since_iso: str | None) -> tuple[str, tuple[str, ...]]:
 
 
 def digest_since(conn: sqlite3.Connection, since_iso: str) -> list[sqlite3.Row]:
-    """Filings routed 'now' or 'digest' that EDGAR accepted at or after `since_iso`, most material first.
-    Jev's scores are often round numbers, so ties are broken newest first (compared as instants, since
-    acceptance times carry their own offsets) and then by accession number, which keeps the order stable.
+    """Filings routed 'now' or 'digest' that no digest has reported yet and EDGAR accepted at or after
+    `since_iso`, most material first. The acceptance bound keeps a reroute or a long backfill from
+    flooding the digest with old filings. Jev's scores are often round numbers, so ties are broken newest
+    first (compared as instants, since acceptance times carry their own offsets) and then by accession
+    number, which keeps the order stable.
     """
     return conn.execute(
         """
         SELECT f.accession_no, f.ticker, f.company, f.url, s.materiality, s.event, s.direction
         FROM briefs b JOIN filings f USING (accession_no) JOIN scores s USING (accession_no)
-        WHERE b.route IN ('now', 'digest') AND julianday(f.accepted_at) >= julianday(?)
+        WHERE b.route IN ('now', 'digest') AND b.digested_at IS NULL
+          AND julianday(f.accepted_at) >= julianday(?)
         ORDER BY s.materiality DESC, julianday(f.accepted_at) DESC, f.accession_no
         """,
         (since_iso,),
     ).fetchall()
+
+
+def mark_digested(conn: sqlite3.Connection, accessions: Iterable[str], at_iso: str) -> int:
+    """Record that these filings went out in a digest, so later digests leave them out.
+    Filings already marked keep their first time. Returns how many were marked.
+    """
+    return sum(
+        conn.execute(
+            "UPDATE briefs SET digested_at = ? WHERE accession_no = ? AND digested_at IS NULL", (at_iso, acc)
+        ).rowcount
+        for acc in accessions
+    )
