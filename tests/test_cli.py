@@ -2,7 +2,7 @@ import json
 import logging
 import sys
 from contextlib import closing
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pandas as pd
@@ -199,6 +199,92 @@ def test_digest_send_failure_still_prints(tmp_path, monkeypatch, capsys, caplog)
     assert "4.4  EXMP  mna" in capsys.readouterr().out
     assert "digest not sent" in caplog.text
     assert "connection refused" in caplog.text
+
+
+def _digested(path):
+    with closing(db.connect(path)) as conn:
+        return {r["accession_no"]: r["digested_at"] for r in conn.execute("SELECT * FROM briefs")}
+
+
+def _send_digest(monkeypatch, send):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    monkeypatch.setattr("tape.notify.send_telegram", send)
+    return main(["digest", "--send"])
+
+
+def test_digest_send_marks_what_it_sent_so_the_next_digest_skips_it(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+
+    assert _send_digest(monkeypatch, lambda text: 1) == 0
+    assert _digested(path)[acc] is not None
+    capsys.readouterr()
+
+    sent = []
+    assert _send_digest(monkeypatch, sent.append) == 0
+    assert sent == ["Tape digest: nothing material today."]
+
+
+def test_digest_send_failure_leaves_filings_for_the_next_digest(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+
+    def boom(text):
+        raise httpx.ConnectError("connection refused")
+
+    assert _send_digest(monkeypatch, boom) == 1
+    assert _digested(path) == {acc: None}
+    capsys.readouterr()
+
+    sent = []
+    assert _send_digest(monkeypatch, sent.append) == 0
+    assert "4.4  EXMP  mna" in sent[0]
+
+
+def test_digest_send_without_credentials_marks_nothing(tmp_path, monkeypatch):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    acc = _seed(path)
+    assert main(["digest", "--send"]) == 1
+    assert _digested(path) == {acc: None}
+
+
+def test_digest_marks_only_with_mark(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+
+    assert main(["digest"]) == 0
+    assert _digested(path) == {acc: None}
+    assert main(["digest", "--mark"]) == 0
+    assert "4.4  EXMP  mna" in capsys.readouterr().out
+    assert _digested(path)[acc] is not None
+
+    assert main(["digest"]) == 0
+    assert capsys.readouterr().out == "Tape digest: nothing material today.\n"
+
+
+def test_digest_lists_a_filing_routed_after_the_previous_digest(tmp_path, monkeypatch, capsys):
+    # Accepted two days ago, before the last digest went out, but only routed since: it used to fall
+    # between the two digests' 24-hour windows.
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    with closing(db.connect(path)) as conn:
+        f = make_filing(1, accepted_at=(datetime.now(UTC) - timedelta(hours=48)).isoformat())
+        db.upsert_filing(conn, f)
+        db.upsert_score(conn, make_score(f.accession_no, 3.2, event="guidance"))
+        db.set_route(conn, f.accession_no, "digest")
+        conn.commit()
+
+    assert main(["digest"]) == 0
+    assert "3.2  EXMP  guidance" in capsys.readouterr().out
+    assert main(["digest", "--hours", "24"]) == 0
+    assert "nothing material" in capsys.readouterr().out
 
 
 @respx.mock

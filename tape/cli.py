@@ -17,6 +17,12 @@ log = logging.getLogger(__name__)
 # sysexits.h EX_TEMPFAIL: the scheduler should simply try again later.
 EXIT_TEMPFAIL = 75
 
+# How far back `tape digest` looks for filings no digest has reported. It has to reach past the last
+# digest a filing could have missed: Tuesday's after a Monday holiday has to see Friday's filings that
+# were only routed by the weekend's passes or Tuesday's backfill. Older ones are left out so a reroute or
+# a long backfill doesn't flood the digest.
+DIGEST_LOOKBACK_HOURS = 120
+
 
 def _edgar(settings: Settings):
     from tape.edgar import Edgar
@@ -151,8 +157,12 @@ def format_digest(rows) -> str:
 
 
 def cmd_digest(args, settings, conn) -> int:
-    since = (datetime.now(UTC) - timedelta(hours=args.hours)).isoformat()
-    text = format_digest(db.digest_since(conn, since))
+    """Print the routed filings no digest has reported yet. They are marked as reported once
+    `--send` delivers the digest, or as soon as it is printed with `--mark` (the agent sends it itself).
+    """
+    now = datetime.now(UTC)
+    rows = db.digest_since(conn, (now - timedelta(hours=args.hours)).isoformat())
+    text = format_digest(rows)
     # Print first so the digest reaches the job log even when delivery fails.
     print(text)
     if args.send:
@@ -170,8 +180,12 @@ def cmd_digest(args, settings, conn) -> int:
         try:
             send_telegram(text)
         except httpx.HTTPError as e:
+            # Left unmarked, so the next digest lists them again.
             log.error("digest not sent: Telegram request failed: %s", e)
             return 1
+    if args.send or args.mark:
+        with db.transaction(conn):
+            db.mark_digested(conn, (r["accession_no"] for r in rows), now.strftime("%Y-%m-%dT%H:%M:%SZ"))
     return 0
 
 
@@ -299,8 +313,13 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--text", help="brief text; read from stdin if omitted")
     br.set_defaults(fn=cmd_brief)
     d = sub.add_parser("digest", help="print the digest of recent material filings")
-    d.add_argument("--hours", type=_positive_int, default=24)
-    d.add_argument("--send", action="store_true", help="also send via Telegram Bot API")
+    d.add_argument("--hours", type=_positive_int, default=DIGEST_LOOKBACK_HOURS,
+                   help="only filings accepted in the last N hours (default %(default)s, so filings routed "
+                        "late on a Friday or before a holiday still make the next digest)")
+    d.add_argument("--send", action="store_true",
+                   help="also send via Telegram Bot API, and mark the filings reported if it goes out")
+    d.add_argument("--mark", action="store_true",
+                   help="mark the printed filings reported, for when the agent sends the digest itself")
     d.set_defaults(fn=cmd_digest)
     st = sub.add_parser("stats", help="filings, scores, routes and Jev spend per day")
     st.add_argument("--days", type=_positive_int, default=7)

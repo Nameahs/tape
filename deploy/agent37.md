@@ -34,6 +34,13 @@ Connect Telegram in the workspace's messaging settings so the agent can message 
 If you would rather send the digest from a script, create a bot with @BotFather, set
 `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`, and use `tape digest --send`.
 
+Either way, each digest lists the routed filings no earlier digest has reported, so a filing that
+was only routed after the evening digest (a morning backfill, a Friday evening pass, a Jev outage)
+goes out in the next one. `--send` marks them reported once Telegram accepts the digest, and leaves
+them for the next run if it fails; the agent path uses `tape digest --mark`. Filings accepted more
+than five days ago are left out (`--hours` changes that), so a reroute or a long backfill doesn't
+flood the digest.
+
 ## 4. Schedules (all times ET)
 
 | Schedule | Task given to the agent |
