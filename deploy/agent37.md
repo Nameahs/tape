@@ -63,7 +63,8 @@ next morning's window retries the day, and once a day has aged out of it, rerun 
 A filing Jev rejected, or one EDGAR kept failing to serve, is given up on after three attempts and
 `tape stats` counts it. `tape retry` lists them with the last error. Once the cause is fixed (a key, a
 parsing bug, a filing EDGAR has since repaired), `tape retry --score` or `--fetch` clears them, optionally
-just one with `--accession ACC`, and the next pass tries them again. A fetch is retried only when the feed
+just one with `--accession ACC`, and the next pass tries them again. An `--accession` that isn't given up
+(a typo, or a filing already retried) exits 1 with an error on stderr, whether listing or clearing. A fetch is retried only when the feed
 or a backfill sees the filing again, so for an older one follow with `tape backfill --days N`.
 
 ### Exit status of `tape run` and `tape backfill`
