@@ -73,6 +73,20 @@ def test_format_digest_empty():
     assert "nothing material" in format_digest([])
 
 
+def _digest_row(n, materiality=3.5):
+    return {"ticker": f"T{n}", "company": f"Company {n}", "materiality": materiality, "event": "guidance",
+            "direction": "good", "url": f"https://example.com/{n}"}
+
+
+def test_format_digest_header_counts_one_filing_in_the_singular():
+    assert format_digest([_digest_row(1)]).splitlines()[0] == "Tape digest: 1 filing worth a look"
+
+
+def test_format_digest_header_counts_several_filings_in_the_plural():
+    rows = [_digest_row(1), _digest_row(2)]
+    assert format_digest(rows).splitlines()[0] == "Tape digest: 2 filings worth a look"
+
+
 def test_stats_command(tmp_path, monkeypatch, capsys):
     path = tmp_path / "t.db"
     monkeypatch.setenv("TAPE_DB_PATH", str(path))

@@ -149,7 +149,8 @@ def cmd_brief(args, settings, conn) -> int:
 def format_digest(rows) -> str:
     if not rows:
         return "Tape digest: nothing material today."
-    lines = [f"Tape digest: {len(rows)} filings worth a look"]
+    n = len(rows)
+    lines = [f"Tape digest: {n} {'filing' if n == 1 else 'filings'} worth a look"]
     for r in rows:
         name = r["ticker"] or r["company"]
         lines.append(f"{r['materiality']:.1f}  {name}  {r['event']} ({r['direction']})  {r['url']}")
