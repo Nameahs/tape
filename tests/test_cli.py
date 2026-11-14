@@ -10,7 +10,7 @@ import pytest
 import respx
 
 from tape import db
-from tape.cli import EXIT_TEMPFAIL, format_digest, format_reroute, main
+from tape.cli import DIGEST_LOOKBACK_HOURS, EXIT_TEMPFAIL, format_digest, format_reroute, main
 from tape.edgar import FEED_URL, EdgarBlockedError
 from tape.evaluate import PRICE_LOOKBACK_DAYS
 from tape.notify import API
@@ -85,6 +85,26 @@ def test_format_digest_header_counts_one_filing_in_the_singular():
 def test_format_digest_header_counts_several_filings_in_the_plural():
     rows = [_digest_row(1), _digest_row(2)]
     assert format_digest(rows).splitlines()[0] == "Tape digest: 2 filings worth a look"
+
+
+def test_format_digest_header_names_a_non_default_window():
+    rows = [_digest_row(1), _digest_row(2), _digest_row(3)]
+    assert format_digest(rows, hours=72).splitlines()[0] == "Tape digest (last 72h): 3 filings worth a look"
+    assert format_digest([], hours=72) == "Tape digest (last 72h): nothing material."
+
+
+def test_digest_names_the_window_only_when_hours_is_given(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+
+    assert main(["digest"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "Tape digest: 1 filing worth a look"
+    assert main(["digest", "--hours", "72"]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "Tape digest (last 72h): 1 filing worth a look"
+    # Asking for the default explicitly reads the same as not asking.
+    assert main(["digest", "--hours", str(DIGEST_LOOKBACK_HOURS)]) == 0
+    assert capsys.readouterr().out.splitlines()[0] == "Tape digest: 1 filing worth a look"
 
 
 def test_stats_command(tmp_path, monkeypatch, capsys):

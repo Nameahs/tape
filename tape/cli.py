@@ -146,11 +146,15 @@ def cmd_brief(args, settings, conn) -> int:
     return 0
 
 
-def format_digest(rows) -> str:
+def format_digest(rows, hours: int | None = None) -> str:
+    """The digest text. `hours` is named in the header when the digest was run with a non-default
+    lookback (catching up after an outage), so the message says it covers more than the usual day.
+    """
+    title = "Tape digest" if hours is None else f"Tape digest (last {hours}h)"
     if not rows:
-        return "Tape digest: nothing material today."
+        return f"{title}: nothing material today." if hours is None else f"{title}: nothing material."
     n = len(rows)
-    lines = [f"Tape digest: {n} {'filing' if n == 1 else 'filings'} worth a look"]
+    lines = [f"{title}: {n} {'filing' if n == 1 else 'filings'} worth a look"]
     for r in rows:
         name = r["ticker"] or r["company"]
         lines.append(f"{r['materiality']:.1f}  {name}  {r['event']} ({r['direction']})  {r['url']}")
@@ -163,7 +167,7 @@ def cmd_digest(args, settings, conn) -> int:
     """
     now = datetime.now(UTC)
     rows = db.digest_since(conn, (now - timedelta(hours=args.hours)).isoformat())
-    text = format_digest(rows)
+    text = format_digest(rows, None if args.hours == DIGEST_LOOKBACK_HOURS else args.hours)
     # Print first so the digest reaches the job log even when delivery fails.
     print(text)
     if args.send:
