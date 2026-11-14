@@ -16,6 +16,18 @@ MAX_RETRY_AFTER = 30.0  # never wait longer than this on one 429
 RETRY_STATUSES = frozenset({500, 502, 503, 504})
 
 
+class PartialSend(httpx.HTTPError):
+    """A later message of a multi-message digest failed after earlier ones were delivered.
+
+    `sent` of `total` messages went out; the original error is the `__cause__`.
+    """
+
+    def __init__(self, message: str, sent: int, total: int) -> None:
+        super().__init__(message)
+        self.sent = sent
+        self.total = total
+
+
 def _pieces(line: str, limit: int) -> list[str]:
     """Break one line into pieces of at most `limit`, at the last space before the limit where there is one.
     The space a piece ends on is dropped; nothing else is lost.
@@ -58,8 +70,9 @@ def send_telegram(text: str, token: str | None = None, chat_id: str | None = Non
     owned = client is None
     http = httpx.Client(timeout=15.0) if client is None else client
     try:
+        parts = chunks(text)
         sent = 0
-        for part in chunks(text):
+        for part in parts:
             try:
                 _post(http, API.format(token=token), {
                     "chat_id": chat_id, "text": part, "disable_web_page_preview": True,
@@ -68,6 +81,9 @@ def send_telegram(text: str, token: str | None = None, chat_id: str | None = Non
                 # httpx puts the request URL in the message, and the token is part of that URL. Callers log
                 # this, and the job log is kept on the workspace.
                 e.args = tuple(a.replace(token, "***") if isinstance(a, str) else a for a in e.args)
+                if sent:
+                    # The chat already has the first messages; a plain error would read as nothing sent.
+                    raise PartialSend(f"{sent} of {len(parts)} messages sent: {e}", sent, len(parts)) from e
                 raise
             sent += 1
         return sent
