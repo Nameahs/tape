@@ -956,3 +956,26 @@ def test_digest_send_logs_why_telegram_refused(tmp_path, monkeypatch, caplog):
     assert "digest not sent" in caplog.text
     assert "Bad Request: chat not found" in caplog.text
     assert token not in caplog.text
+
+
+@respx.mock
+def test_digest_send_logs_a_partial_send(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    _seed(path)
+    token = "123456:SECRET"
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", token)
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "c")
+    monkeypatch.setattr("tape.notify.chunks", lambda text: ["first", "second", "third"])
+    respx.post(API.format(token=token)).mock(side_effect=[
+        httpx.Response(200, json={"ok": True}),
+        httpx.Response(403, json={"ok": False, "description": "Forbidden: bot was blocked by the user"}),
+    ])
+
+    assert main(["digest", "--send"]) == 1
+    assert "digest partly sent (1 of 3 messages)" in caplog.text
+    assert "bot was blocked by the user" in caplog.text
+    assert "digest not sent" not in caplog.text
+    assert token not in caplog.text
+    # Which filings went out isn't known, so none is marked and the next digest lists them all again.
+    assert all(v is None for v in _digested(path).values())
