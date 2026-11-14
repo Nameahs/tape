@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from tape import notify
-from tape.notify import API, MAX_ATTEMPTS, RETRY_STATUSES, chunks, send_telegram
+from tape.notify import API, MAX_ATTEMPTS, RETRY_STATUSES, PartialSend, chunks, send_telegram
 
 
 def test_chunks_respects_limit():
@@ -236,3 +236,26 @@ def test_send_telegram_error_without_usable_description(sleeps, body):
     # httpx's own message, unchanged: it ends with the MDN link for the status.
     assert message.endswith("/Status/403")
     assert token not in message
+
+
+@respx.mock
+def test_send_telegram_reports_a_partial_send(sleeps):
+    token = "123456:SECRET"
+    ok = httpx.Response(200, json={"ok": True})
+    refused = httpx.Response(400, json={"ok": False, "description": "Bad Request: message is too long"})
+    respx.post(API.format(token=token)).mock(side_effect=[ok, refused])
+    with pytest.raises(PartialSend) as e:
+        send_telegram("\n".join(["a" * 3000, "b" * 3000]), token=token, chat_id="42", client=httpx.Client())
+    assert (e.value.sent, e.value.total) == (1, 2)
+    assert isinstance(e.value.__cause__, httpx.HTTPStatusError)
+    assert str(e.value).startswith("1 of 2 messages sent: ")
+    assert "message is too long" in str(e.value)
+    assert token not in str(e.value)
+
+
+@respx.mock
+def test_send_telegram_first_message_failure_is_not_partial(sleeps):
+    respx.post(API.format(token="T")).respond(400, json={"ok": False})
+    with pytest.raises(httpx.HTTPStatusError) as e:
+        send_telegram("\n".join(["a" * 3000, "b" * 3000]), token="T", chat_id="42", client=httpx.Client())
+    assert not isinstance(e.value, PartialSend)

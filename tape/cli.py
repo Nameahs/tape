@@ -170,7 +170,7 @@ def cmd_digest(args, settings, conn) -> int:
 
         import httpx
 
-        from tape.notify import send_telegram
+        from tape.notify import PartialSend, send_telegram
 
         # A secret read with $(cat file) keeps its trailing newline, and a blank value is as good as unset.
         missing = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.environ.get(k, "").strip()]
@@ -179,6 +179,12 @@ def cmd_digest(args, settings, conn) -> int:
             return 1
         try:
             send_telegram(text)
+        except PartialSend as e:
+            # Which filings made it out isn't known, so all stay unmarked and a rerun repeats the
+            # messages already in the chat; the log says so instead of claiming nothing went out.
+            log.error("digest partly sent (%d of %d messages): Telegram request failed: %s",
+                      e.sent, e.total, e.__cause__ or e)
+            return 1
         except httpx.HTTPError as e:
             # Left unmarked, so the next digest lists them again.
             log.error("digest not sent: Telegram request failed: %s", e)
