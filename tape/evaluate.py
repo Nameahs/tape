@@ -166,7 +166,16 @@ def load_frame(conn: sqlite3.Connection) -> pd.DataFrame:
 
 
 def spearman(x: pd.Series, y: pd.Series) -> float:
+    if x.nunique() < 2 or y.nunique() < 2:
+        return float("nan")
     return float(x.rank().corr(y.rank()))
+
+
+def _nanmean(values: list[float]) -> float:
+    """Mean values while keeping an all-undefined baseline undefined without a warning."""
+    if all(np.isnan(value) for value in values):
+        return float("nan")
+    return float(np.nanmean(values))
 
 
 def rule_flag(items: pd.Series) -> pd.Series:
@@ -311,8 +320,8 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
         gap_ci_high=ci_high,
         spearman=spearman(score, move),
         hit_rate_top10_daily=float(np.mean(daily_hits)),
-        random_gap_ratio=float(np.nanmean(rand_gaps)),
-        random_spearman=float(np.nanmean(rand_rhos)),
+        random_gap_ratio=_nanmean(rand_gaps),
+        random_spearman=_nanmean(rand_rhos),
         rule_flagged=k,
         rule_lift=_lift(flag, move),
         jev_lift_same_budget=_lift(jev_flag, move),

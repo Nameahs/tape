@@ -1,4 +1,5 @@
 import json
+import warnings
 from datetime import date, datetime
 
 import numpy as np
@@ -336,3 +337,27 @@ def test_format_report_says_na_when_scores_all_tie():
     text = format_report(evaluate(df))
     assert "Spearman score vs move: n/a" in text
     assert "nan" not in text
+
+
+def test_evaluate_constant_event_scores_emits_no_warnings():
+    df = _frame(signal=1.0, n=200)
+    event = df["event"] == "mna"
+    df.loc[event, "materiality"] = 3.0
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        report = evaluate(df)
+
+    assert np.isnan(report.by_event["mna"]["spearman"])
+
+
+def test_evaluate_all_tied_scores_emits_no_warnings():
+    df = _frame(signal=1.0, n=200)
+    df["materiality"] = 3.0
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        report = evaluate(df)
+
+    assert np.isnan(report.spearman)
+    assert np.isnan(report.random_spearman)
