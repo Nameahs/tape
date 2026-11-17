@@ -849,3 +849,41 @@ def test_a_retried_fetch_is_fetched_by_the_next_pass(conn):
 
     assert (stats.fetched, stats.scored) == (1, 1)
     assert conn.execute("SELECT COUNT(*) FROM fetch_failures").fetchone()[0] == 0
+
+
+class _UsageOnlyFor(FakeJev):
+    """Returns token usage only for filings whose text mentions `word`."""
+
+    def __init__(self, word: str) -> None:
+        super().__init__()
+        self.word = word
+
+    def system_one(self, state, questions, *, model=None):
+        resp = super().system_one(state, questions, model=model)
+        if self.word not in state["text"]:
+            resp.usage = None
+        return resp
+
+
+def test_scores_without_usage_are_counted_as_unknown_cost_not_free(conn, caplog):
+    for n, text in ((1, "priced"), (2, "fine"), (3, "fine")):
+        db.upsert_filing(conn, make_filing(n, clean_text=text))
+    conn.commit()
+    stats = PassStats()
+    score_and_route(conn, _UsageOnlyFor("priced"), Settings(), stats)
+
+    assert stats.scored == 3 and stats.cost_unknown == 2
+    priced = conn.execute("SELECT cost_usd FROM scores WHERE cost_usd IS NOT NULL").fetchone()[0]
+    assert stats.cost_usd == pytest.approx(priced)
+    assert " cost_unknown=2" in stats.summary()
+    assert "no token usage for 2 score(s)" in caplog.text
+
+
+def test_summary_and_log_leave_out_unknown_cost_when_every_cost_is_known(conn, caplog):
+    db.upsert_filing(conn, make_filing(1, clean_text="fine"))
+    conn.commit()
+    stats = PassStats()
+    score_and_route(conn, FakeJev(), Settings(), stats)
+    assert stats.scored == 1 and stats.cost_unknown == 0
+    assert "cost_unknown" not in stats.summary()
+    assert "no token usage" not in caplog.text
