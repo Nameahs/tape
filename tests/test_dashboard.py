@@ -121,10 +121,10 @@ def test_daily_buckets_by_eastern_day_of_scoring(conn):
     daily = _daily(conn, NOW)
     assert len(daily) == 14
     assert daily[0][0].isoformat() == "2026-09-30" and daily[-1][0].isoformat() == "2026-10-13"
-    by_day = {d.isoformat(): (n, round(c, 6)) for d, n, c in daily}
-    assert by_day["2026-10-13"] == (2, 0.002)
-    assert by_day["2026-10-12"] == (1, 0.001)
-    assert by_day["2026-10-11"] == (0, 0.0)
+    by_day = {d.isoformat(): (n, round(c, 6), u) for d, n, c, u in daily}
+    assert by_day["2026-10-13"] == (2, 0.002, 1)
+    assert by_day["2026-10-12"] == (1, 0.001, 0)
+    assert by_day["2026-10-11"] == (0, 0.0, 0)
 
 
 def test_build_shows_daily_section(conn):
@@ -193,6 +193,27 @@ def test_briefed_now_tile_counts_recent_filings_routed_now(conn):
     _seed(conn)
     db.set_route(conn, make_filing(2).accession_no, "now")  # accepted Oct 1, outside the window
     assert _tile_value(build(conn, None, NOW), "Briefed now") == "1"
+
+
+def test_24h_cost_tile_notes_scores_of_unknown_cost(conn):
+    _score_at(conn, 1, "2026-10-13T12:00:00Z", 0.003)
+    _score_at(conn, 2, "2026-10-13T13:00:00Z", None)
+    _score_at(conn, 3, "2026-10-13T14:00:00Z", None)
+    _score_at(conn, 4, "2026-10-12T12:00:00Z", None)  # outside the 24h window, still in the daily table
+    html = build(conn, None, NOW)
+    assert _tile_value(html, "Jev cost, 24h") == "$0.0030"
+    assert '<b>$0.0030</b><span class="muted">2 of unknown cost</span>' in html
+    assert '<td>Tue Oct 13</td><td class="num">3</td><td class="num">$0.0030 (2 unknown)</td>' in html
+    assert '<td>Mon Oct 12</td><td class="num">1</td><td class="num">$0.0000 (1 unknown)</td>' in html
+    assert '<th class="num">$0.0030 (3 unknown)</th>' in html  # window total
+
+
+def test_cost_shows_no_unknown_note_when_every_cost_is_known(conn):
+    _score_at(conn, 1, "2026-10-13T12:00:00Z", 0.003)
+    _score_at(conn, 2, "2026-10-13T13:00:00Z", 0.0)  # a free call is known, not unknown
+    html = build(conn, None, NOW)
+    assert "unknown" not in html
+    assert '<b>$0.0030</b></div>' in html
 
 
 def test_spend_query_seeks_on_the_scored_at_index(conn):

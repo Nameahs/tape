@@ -43,6 +43,8 @@ class PassStats:
     scored: int = 0
     routes: Counter = field(default_factory=Counter)
     cost_usd: float = 0.0
+    # Scores Jev returned no token usage for: their cost is unknown and not in cost_usd.
+    cost_unknown: int = 0
     # EDGAR blocked us mid-pass, so some discovered filings were left for a later pass.
     blocked: bool = False
     # The feed may have moved on past filings we never saw; see feed_gap().
@@ -58,6 +60,8 @@ class PassStats:
             f"discovered={self.discovered} fetched={self.fetched} errors={self.fetch_errors} "
             f"scored={self.scored} now={r['now']} digest={r['digest']} log={r['log']} cost=${self.cost_usd:.4f}"
         )
+        if self.cost_unknown:
+            text += f" cost_unknown={self.cost_unknown}"
         if self.missing_days:
             text += f" missing_days={self.missing_days}"
         if self.outage:
@@ -194,7 +198,14 @@ def score_and_route(conn: sqlite3.Connection, jev: SystemOneClient, settings: Se
             db.set_route(conn, s.accession_no, r)
         stats.scored += 1
         stats.routes[r] += 1
-        stats.cost_usd += s.cost_usd or 0.0
+        if s.cost_usd is None:
+            stats.cost_unknown += 1
+        else:
+            stats.cost_usd += s.cost_usd
+    if stats.cost_unknown:
+        # runs.cost_usd only holds the known part, so say it undercounts where someone will see it.
+        log.warning("Jev returned no token usage for %d score(s); their cost is not in the run's total",
+                    stats.cost_unknown)
     if outages:
         log.warning("Jev is unavailable; left %d filing(s) for a later pass, %d of them not sent (last error: %s)",
                     len(outages) + unsent, unsent, outages[-1])

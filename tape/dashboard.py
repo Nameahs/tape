@@ -20,7 +20,8 @@ DAILY_DAYS = 14
 DAILY_SQL = "SELECT scored_at, cost_usd FROM scores WHERE julianday(scored_at) >= julianday(?)"
 # The 24h tiles count Jev calls by when they were made, so backfill spend shows up; same index rule as above.
 SPEND_SQL = """
-SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost FROM scores
+SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost, COALESCE(SUM(cost_usd IS NULL), 0) AS unknown
+FROM scores
 WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) <= julianday(?)
 """
 
@@ -111,16 +112,25 @@ def _recent(conn: sqlite3.Connection, since: str) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def _daily(conn: sqlite3.Connection, now: datetime, days: int = DAILY_DAYS) -> list[tuple[date, int, float]]:
-    """(day, scores made, Jev cost) for the last `days` Eastern-time days, today included, oldest first.
+Day = tuple[date, int, float, int]
+
+
+def _unknown_note(unknown: int) -> str:
+    return f" ({unknown:,} unknown)" if unknown else ""
+
+
+def _daily(conn: sqlite3.Connection, now: datetime, days: int = DAILY_DAYS) -> list[Day]:
+    """(day, scores made, Jev cost, scores of unknown cost) for the last `days` Eastern-time days,
+    today included, oldest first.
 
     Bucketed by when Jev was called (scored_at), not by the filing's date, so a backfill shows up as
-    spend on the day it ran. Days with no calls are present with zeros so gaps are visible.
+    spend on the day it ran. Days with no calls are present with zeros so gaps are visible. A score
+    Jev returned no token usage for has no cost: it is counted as unknown rather than as free.
     """
     today = now.astimezone(ET).date()
     first = today - timedelta(days=days - 1)
     start_utc = datetime.combine(first, time(), ET).astimezone(UTC)
-    buckets = {first + timedelta(days=i): [0, 0.0] for i in range(days)}
+    buckets = {first + timedelta(days=i): [0, 0.0, 0] for i in range(days)}
     rows = conn.execute(
         DAILY_SQL, (start_utc.isoformat(),),
     )
@@ -128,14 +138,17 @@ def _daily(conn: sqlite3.Connection, now: datetime, days: int = DAILY_DAYS) -> l
         b = buckets.get(datetime.fromisoformat(r["scored_at"]).astimezone(ET).date())
         if b is not None:
             b[0] += 1
-            b[1] += r["cost_usd"] or 0.0
-    return [(d, int(n), float(c)) for d, (n, c) in sorted(buckets.items())]
+            if r["cost_usd"] is None:
+                b[2] += 1
+            else:
+                b[1] += r["cost_usd"]
+    return [(d, int(n), float(c), int(u)) for d, (n, c, u) in sorted(buckets.items())]
 
 
-def _daily_chart(daily: list[tuple[date, int, float]]) -> str:
+def _daily_chart(daily: list[Day]) -> str:
     """Columns of Jev cost per day; hover shows the day's call count. Only the peak is labeled so
     fourteen values don't crowd the bars."""
-    peak = max(c for _, _, c in daily)
+    peak = max(c for _, _, c, _ in daily)
     if peak <= 0:
         return ""
     w, h, left, bottom, top = 640, 220, 56, 40, 24
@@ -150,7 +163,7 @@ def _daily_chart(daily: list[tuple[date, int, float]]) -> str:
                      f'<text x="{left - 8}" y="{y + 4:.1f}" text-anchor="end">${peak * frac:.4f}</text>')
     parts.append(f'<line x1="{left}" x2="{w - 16}" y1="{base}" y2="{base}"/>')
     peak_i = max(range(len(daily)), key=lambda i: daily[i][2])
-    for i, (d, n, c) in enumerate(daily):
+    for i, (d, n, c, _) in enumerate(daily):
         cx = left + step * i + step / 2
         if i % 2 == (len(daily) - 1) % 2:  # every other day, always including today
             parts.append(f'<text x="{cx:.1f}" y="{base + 18}" text-anchor="middle">{d:%m-%d}</text>')
@@ -168,20 +181,20 @@ def _daily_chart(daily: list[tuple[date, int, float]]) -> str:
     return "".join(parts)
 
 
-def _daily_table(daily: list[tuple[date, int, float]]) -> str:
-    if not any(n for _, n, _ in daily):
+def _daily_table(daily: list[Day]) -> str:
+    if not any(n for _, n, _, _ in daily):
         return f'<p class="muted">No Jev calls in the last {len(daily)} days.</p>'
     rows = "".join(
-        f'<tr><td>{d:%a %b %d}</td><td class="num">{n:,}</td><td class="num">${c:.4f}</td></tr>'
-        for d, n, c in reversed(daily)
+        f'<tr><td>{d:%a %b %d}</td><td class="num">{n:,}</td><td class="num">${c:.4f}{_unknown_note(u)}</td></tr>'
+        for d, n, c, u in reversed(daily)
     )
-    total_n = sum(n for _, n, _ in daily)
-    total_c = sum(c for _, _, c in daily)
+    total_n = sum(n for _, n, _, _ in daily)
+    total = f"${sum(c for _, _, c, _ in daily):.4f}{_unknown_note(sum(u for _, _, _, u in daily))}"
     return (_daily_chart(daily)
             + '<details><summary class="muted">Table view</summary><div class="scroll"><table>'
             '<tr><th>Day (ET)</th><th class="num">Scored</th><th class="num">Jev cost</th></tr>'
             + rows
-            + f'<tr><th>Total</th><th class="num">{total_n:,}</th><th class="num">${total_c:.4f}</th></tr>'
+            + f'<tr><th>Total</th><th class="num">{total_n:,}</th><th class="num">{total}</th></tr>'
             '</table></div></details>')
 
 
@@ -201,7 +214,9 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
     tiles = [
         _tile("Filings scored, 24h", f"{spend['n']:,}"),
         _tile("Briefed now", f"{briefs:,}"),
-        _tile("Jev cost, 24h", f"${spend['cost']:.4f}"),
+        # Scores Jev returned no usage for aren't in the total; say how many so it isn't read as complete.
+        _tile("Jev cost, 24h", f"${spend['cost']:.4f}",
+              f"{spend['unknown']:,} of unknown cost" if spend["unknown"] else ""),
     ]
     eval_html = ('<p class="muted">No evaluation yet. Run <code>tape backfill</code> '
                  'then <code>tape evaluate</code>.</p>')
