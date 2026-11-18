@@ -363,3 +363,38 @@ def test_format_report_omits_by_event_block_when_empty():
     df = _frame(signal=1.0, n=200)
     df["event"] = [f"e{i % 50}" for i in range(200)]  # 4 filings each, none qualify
     assert "By event" not in format_report(evaluate(df))
+
+
+def test_top10_hit_rate_pools_picks_over_days_with_a_choice():
+    df = _frame(signal=1.0, n=400)  # 20 event days of 20 filings
+    r = evaluate(df)
+    assert r.top10_days == 20
+    expected = sum(
+        int((g.sort_values("accession_no").nlargest(10, "materiality")["abs_ar"] > 0.03).sum())
+        for _, g in df.groupby("event_day")
+    ) / 200
+    assert r.hit_rate_top10_daily == pytest.approx(expected)
+    assert "(20 days with more than 10 filings)" in format_report(r)
+
+
+def test_top10_hit_rate_ignores_days_too_small_to_choose_from():
+    df = _frame(signal=1.0, n=400)
+    base = evaluate(df).hit_rate_top10_daily
+    thin = df.iloc[:30].copy()
+    thin["accession_no"] = [f"t{i}" for i in range(30)]
+    thin["event_day"] = [f"2026-10-{1 + i // 10:02d}" for i in range(30)]  # three days of exactly 10
+    thin["abs_ar"] = 0.5  # every one a big mover; would drag the rate up if counted
+    r = evaluate(pd.concat([df, thin], ignore_index=True))
+    assert r.top10_days == 20
+    assert r.hit_rate_top10_daily == pytest.approx(base)
+
+
+def test_top10_hit_rate_is_na_when_no_day_has_more_than_10_filings():
+    df = _frame(signal=1.0, n=200)
+    df["event_day"] = [f"2026-09-{1 + i % 25:02d}" for i in range(200)]  # 8 filings a day
+    r = evaluate(df)
+    assert r.top10_days == 0 and np.isnan(r.hit_rate_top10_daily)
+    text = format_report(r)
+    assert "Top-10 daily picks moving > 3%: n/a  (0 days with more than 10 filings)" in text
+    assert "nan" not in text
+    assert _strict_loads(r.to_json())["hit_rate_top10_daily"] is None

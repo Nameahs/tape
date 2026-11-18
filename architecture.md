@@ -112,7 +112,7 @@ The test: do higher Jev materiality scores line up with bigger next-day stock mo
 | --- | --- |
 | Mean absolute abnormal return, top 10% vs bottom 50% | The headline gap |
 | Rank correlation (Spearman) between score and move | Does the whole ranking work, not just the top |
-| Hit rate: share of top-10 daily picks that moved over 3% | Would the Telegram pings have been worth reading |
+| Hit rate: share of top-10 daily picks that moved over 3%, pooled over days with more than 10 filings | Would the Telegram pings have been worth reading |
 | Cost per filing and latency | Proof it is cheap enough to run on everything |
 
 **Known weak spots.** Earnings releases are scheduled, so their moves are partly expected; the `surprise` question and a by-event-type breakdown address this. Jev may have seen some backfill-period news in training, so the live forward period (filings scored before prices exist) is the cleaner test and is reported separately.
