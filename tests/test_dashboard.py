@@ -105,6 +105,9 @@ _BUCKETS = REPORT["by_score"]
     ({**REPORT, "by_score": {**_BUCKETS, "3": {"n": 2}}}, "score bucket '3'"),
     ({**REPORT, "by_score": {**_BUCKETS, "4": {"n": 2, "mean_abs_ar": None}}}, "score bucket '4'"),
     ({**REPORT, "by_score": {**_BUCKETS, "5": 0.06}}, "score bucket '5'"),
+    ({**REPORT, "by_event": [1]}, "'by_event' not an object"),
+    ({**REPORT, "by_event": {"mna": {"n": 9}}}, "event 'mna'"),
+    ({**REPORT, "by_event": {"mna": {"n": 9, "mean_abs_ar": 0.02, "spearman": "0.3"}}}, "event 'mna'"),
 ])
 def test_write_with_malformed_report_leaves_out_evaluation(report, reason, conn, tmp_path, caplog):
     _seed(conn)
@@ -276,3 +279,33 @@ def test_recent_table_cuts_score_ties_newest_first(conn):
     assert len(rows) == 25
     assert [r["company"] for r in rows[22:]] == ["Co 28", "Co 23", "Co 24"]
     assert [r["company"] for r in rows[:22]] == [f"Co {n}" for n in range(22, 0, -1)]
+
+
+BY_EVENT = {
+    "other": {"n": 12, "mean_abs_ar": 0.008, "spearman": None},
+    "mna": {"n": 42, "mean_abs_ar": 0.0184, "spearman": 0.31},
+    "<x>": {"n": 12, "mean_abs_ar": 0.01, "spearman": 0.05},
+}
+
+
+def test_build_shows_results_within_each_event(conn):
+    html = build(conn, {**REPORT, "by_event": BY_EVENT}, NOW)
+    assert "Within each event type" in html
+    assert html.index("<td>mna</td>") < html.index("<td>&lt;x&gt;</td>") < html.index("<td>other</td>")
+    mna_row = html[html.index("<td>mna</td>"):].split("</tr>")[0]
+    assert "42" in mna_row and "1.84%" in mna_row and "0.31" in mna_row
+    other_row = html[html.index("<td>other</td>"):].split("</tr>")[0]
+    assert "n/a" in other_row
+
+
+@pytest.mark.parametrize("by_event", [None, {}])
+def test_build_leaves_out_event_table_when_report_has_none(by_event, conn):
+    report = REPORT if by_event is None else {**REPORT, "by_event": by_event}
+    assert "Within each event type" not in build(conn, report, NOW)
+
+
+def test_write_shows_event_table_from_a_report_on_disk(conn, tmp_path):
+    path = tmp_path / "eval.json"
+    path.write_text(json.dumps({**REPORT, "by_event": BY_EVENT}))
+    html = write(conn, tmp_path / "dash.html", path).read_text()
+    assert "Within each event type" in html and "No evaluation yet" not in html
