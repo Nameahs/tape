@@ -330,6 +330,7 @@ def format_report(r: Report) -> str:
         "",
         "Mean |abnormal return| by materiality score",
         *(f"  {k}: {v['mean_abs_ar']:.2%}  (n={v['n']})" for k, v in sorted(r.by_score.items())),
+        *_by_event_lines(r.by_event),
         "",
         f"Top 10% vs bottom 50%:  {r.top10_mean:.2%} vs {r.bottom50_mean:.2%}  = {fmt_metric(r.gap_ratio, '.2f', 'x')}"
         f"  ({_ci_text(r)}; random {fmt_metric(r.random_gap_ratio, '.2f', 'x')})",
@@ -340,6 +341,19 @@ def format_report(r: Report) -> str:
         f"Jev cost per filing: {_cost_text(r)}, median latency {r.median_latency_ms:.0f} ms",
     ]
     return "\n".join(lines)
+
+
+def _by_event_lines(by_event: dict[str, dict[str, float]]) -> list[str]:
+    """Rank correlation within each event type, biggest groups first. The overall Spearman mixes
+    kinds of news with very different typical moves; this says whether Jev ranks within one.
+    """
+    if not by_event:
+        return []
+    events = sorted(by_event.items(), key=lambda kv: (-kv[1]["n"], kv[0]))
+    return ["", "By event (5+ filings)", *(
+        f"  {ev}: {v['mean_abs_ar']:.2%} mean move, Spearman {fmt_metric(v['spearman'], '.2f')}  (n={v['n']})"
+        for ev, v in events
+    )]
 
 
 def _ci_text(r: Report) -> str:

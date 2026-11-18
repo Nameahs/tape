@@ -46,7 +46,7 @@ Everything runs inside one Agent37 workspace. Plain Python does the repeatable w
 | Notifier | `tape/notify.py` | Sends briefs and the digest to Telegram | Agent37's Telegram integration, or the Bot API fallback |
 | Store | `tape/db.py` | Filings, scores, briefs, price outcomes and a log of each pipeline pass | A SQLite file in the workspace |
 | Evaluator | `tape/evaluate.py` | Pulls prices, computes next-day abnormal returns, compares score groups and baselines | Nightly scheduled job, plus a one-time backfill |
-| Dashboard | `tape/dashboard.py` | One page: today's scored filings, mean move by score, cost per day | Static HTML rebuilt nightly |
+| Dashboard | `tape/dashboard.py` | One page: today's scored filings, mean move by score and the score-vs-move correlation within each event type, cost per day | Static HTML rebuilt nightly |
 
 **Feed gaps.** The feed holds the latest 100 entries, so filings can scroll off between passes. A pass flags a full feed that shares nothing with the store, and a daily `tape backfill` reads EDGAR's daily index to pick up whatever was missed. A weekday with no index is reported rather than treated as a day with no filings, since it may be a holiday or an index that is late or refused.
 

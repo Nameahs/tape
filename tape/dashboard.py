@@ -40,6 +40,7 @@ body { margin: 0; }
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; padding: 24px 16px; }
 main { max-width: 960px; margin: 0 auto; }
 h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 32px 0 8px; }
+h3 { font-size: 14px; margin: 20px 0 6px; }
 .muted { color: var(--text-secondary); }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 20px; }
 .tile { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; }
@@ -199,6 +200,20 @@ def _daily_table(daily: list[Day]) -> str:
             '</table></div></details>')
 
 
+def _by_event_table(by_event: dict | None) -> str:
+    """Score-vs-move within each event type. Absent from reports written before it existed."""
+    if not by_event:
+        return ""
+    rows = "".join(
+        f'<tr><td>{escape(ev)}</td><td class="num">{v["n"]:,}</td><td class="num">{v["mean_abs_ar"]:.2%}</td>'
+        f'<td class="num">{fmt_metric(v.get("spearman"), ".2f")}</td></tr>'
+        for ev, v in sorted(by_event.items(), key=lambda kv: (-kv[1]["n"], kv[0]))
+    )
+    return ('<h3>Within each event type</h3><div class="scroll"><table>'
+            '<tr><th>Event</th><th class="num">Filings</th><th class="num">Mean |abnormal return|</th>'
+            '<th class="num">Rank correlation</th></tr>' + rows + "</table></div>")
+
+
 def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=24)).isoformat()
@@ -242,6 +257,7 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
             + '<details><summary class="muted">Table view</summary><div class="scroll"><table>'
             '<tr><th>Score</th><th class="num">Filings</th><th class="num">Mean |abnormal return|</th></tr>'
             + rows + "</table></div></details>"
+            + _by_event_table(report.get("by_event"))
             + f'<p class="muted">Item-code rule ({report["rule_flagged"]:,} flags): '
             f'lift {fmt_metric(report.get("rule_lift"), ".2f", "x")}. '
             f'Jev at the same alert volume: lift {fmt_metric(report.get("jev_lift_same_budget"), ".2f", "x")}.</p>'
@@ -311,4 +327,13 @@ def _report_problem(report: dict) -> str | None:
         if not (isinstance(v, dict) and _is_number(v.get("n")) and _is_number(v.get("mean_abs_ar"))
                 and math.isfinite(v["mean_abs_ar"])):
             return f"score bucket {k!r} needs numeric 'n' and 'mean_abs_ar'"
+    by_event = report.get("by_event")  # optional: older reports don't have it
+    if by_event is not None:
+        if not isinstance(by_event, dict):
+            return "'by_event' not an object"
+        for k, v in by_event.items():
+            if not (isinstance(v, dict) and _is_number(v.get("n")) and _is_number(v.get("mean_abs_ar"))
+                    and math.isfinite(v["mean_abs_ar"])
+                    and (v.get("spearman") is None or _is_number(v["spearman"]))):
+                return f"event {k!r} needs numeric 'n' and 'mean_abs_ar'"
     return None
