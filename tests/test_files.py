@@ -61,7 +61,7 @@ def test_ticker_cache_with_non_ascii_titles_is_read_under_an_ascii_locale(tmp_pa
 
 def test_eval_report_with_non_ascii_text_is_read_under_an_ascii_locale(tmp_path):
     path = tmp_path / "eval.json"
-    path.write_bytes('{"note": "Société — n/a"}'.encode())
+    path.write_bytes('{"n": 1, "rule_flagged": 0, "by_score": {}, "note": "Société — n/a"}'.encode())
     code = "import sys; from pathlib import Path; from tape.dashboard import _read_report; " \
            "print(_read_report(Path(sys.argv[1])) is not None)"
     result = run_in_ascii_locale(code, str(path))

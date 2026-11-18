@@ -93,6 +93,41 @@ def test_write_with_unusable_report_leaves_out_evaluation(text, conn, tmp_path, 
     assert report.read_text() == text  # left for someone to look at
 
 
+_BUCKETS = REPORT["by_score"]
+
+
+@pytest.mark.parametrize("report, reason", [
+    ({k: v for k, v in REPORT.items() if k != "n"}, "'n' missing"),
+    ({k: v for k, v in REPORT.items() if k != "by_score"}, "'by_score' missing"),
+    ({k: v for k, v in REPORT.items() if k != "rule_flagged"}, "'rule_flagged' missing"),
+    ({**REPORT, "n": "1200"}, "'n' missing or not a number"),
+    ({**REPORT, "by_score": [1, 2]}, "'by_score' missing or not an object"),
+    ({**REPORT, "by_score": {**_BUCKETS, "3": {"n": 2}}}, "score bucket '3'"),
+    ({**REPORT, "by_score": {**_BUCKETS, "4": {"n": 2, "mean_abs_ar": None}}}, "score bucket '4'"),
+    ({**REPORT, "by_score": {**_BUCKETS, "5": 0.06}}, "score bucket '5'"),
+])
+def test_write_with_malformed_report_leaves_out_evaluation(report, reason, conn, tmp_path, caplog):
+    _seed(conn)
+    path = tmp_path / "eval.json"
+    path.write_text(json.dumps(report))
+
+    html = write(conn, tmp_path / "dash.html", path).read_text()
+
+    assert "No evaluation yet" in html
+    assert "Filings scored, 24h" in html  # the rest of the page still renders
+    assert str(path) in caplog.text and reason in caplog.text
+
+
+def test_write_accepts_report_with_only_required_keys(conn, tmp_path):
+    path = tmp_path / "eval.json"
+    path.write_text(json.dumps({"n": 3, "rule_flagged": 0, "by_score": {"2": {"n": 3, "mean_abs_ar": 0.01}}}))
+
+    html = write(conn, tmp_path / "dash.html", path).read_text()
+
+    assert "3 filings with next-day prices" in html
+    assert "Rank correlation" in html and "nan" not in html
+
+
 def test_failed_write_keeps_previous_dashboard(conn, tmp_path, monkeypatch):
     out = tmp_path / "dash.html"
     out.write_text("old page")

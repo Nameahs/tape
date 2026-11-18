@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 from datetime import UTC, date, datetime, time, timedelta
 from html import escape
@@ -287,7 +288,27 @@ def _read_report(path: Path) -> dict | None:
     except (OSError, ValueError) as e:
         log.warning("ignoring unreadable eval report %s: %s", path, e)
         return None
-    if not isinstance(report, dict):
-        log.warning("ignoring unreadable eval report %s: not a JSON object", path)
+    problem = "not a JSON object" if not isinstance(report, dict) else _report_problem(report)
+    if problem:
+        log.warning("ignoring unreadable eval report %s: %s", path, problem)
         return None
     return report
+
+
+def _is_number(x: object) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def _report_problem(report: dict) -> str | None:
+    """What build() would trip over, if anything. Optional metrics may be missing or null; they show as n/a."""
+    for key in ("n", "rule_flagged"):
+        if not _is_number(report.get(key)):
+            return f"{key!r} missing or not a number"
+    by_score = report.get("by_score")
+    if not isinstance(by_score, dict):
+        return "'by_score' missing or not an object"
+    for k, v in by_score.items():
+        if not (isinstance(v, dict) and _is_number(v.get("n")) and _is_number(v.get("mean_abs_ar"))
+                and math.isfinite(v["mean_abs_ar"])):
+            return f"score bucket {k!r} needs numeric 'n' and 'mean_abs_ar'"
+    return None
