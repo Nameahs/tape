@@ -398,3 +398,16 @@ def test_top10_hit_rate_is_na_when_no_day_has_more_than_10_filings():
     assert "Top-10 daily picks moving > 3%: n/a  (0 days with more than 10 filings)" in text
     assert "nan" not in text
     assert _strict_loads(r.to_json())["hit_rate_top10_daily"] is None
+def test_format_report_says_na_when_no_score_has_a_latency():
+    df = _frame(signal=1.0, n=200)
+    df["latency_ms"] = None
+    r = evaluate(df)
+    assert np.isnan(r.median_latency_ms)
+    text = format_report(r)
+    assert text.endswith("median latency n/a")
+    assert "nan" not in text
+    assert _strict_loads(r.to_json())["median_latency_ms"] is None
+
+
+def test_format_report_prints_median_latency_in_ms():
+    assert format_report(evaluate(_frame(signal=1.0, n=200))).endswith("median latency 120 ms")
