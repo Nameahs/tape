@@ -336,3 +336,30 @@ def test_format_report_says_na_when_scores_all_tie():
     text = format_report(evaluate(df))
     assert "Spearman score vs move: n/a" in text
     assert "nan" not in text
+
+
+def test_format_report_lists_events_by_filing_count():
+    df = _frame(signal=1.0, n=200)
+    df["event"] = ["mna"] * 120 + ["earnings_guidance"] * 76 + ["other"] * 4
+    r = evaluate(df)
+    lines = format_report(r).splitlines()
+    start = lines.index("By event (5+ filings)")
+    block = lines[start + 1:start + 3]
+    assert block[0].startswith("  mna: ") and block[0].endswith("(n=120)")
+    assert block[1].startswith("  earnings_guidance: ") and block[1].endswith("(n=76)")
+    assert f"{r.by_event['mna']['mean_abs_ar']:.2%} mean move" in block[0]
+    assert not any(line.startswith("  other:") for line in lines)  # under 5 filings, not in by_event
+
+
+def test_format_report_by_event_says_na_for_undefined_spearman():
+    df = _frame(signal=1.0, n=200)
+    df.loc[df["event"] == "other", "materiality"] = 1.0
+    text = format_report(evaluate(df))
+    other = next(line for line in text.splitlines() if line.startswith("  other:"))
+    assert "Spearman n/a" in other
+
+
+def test_format_report_omits_by_event_block_when_empty():
+    df = _frame(signal=1.0, n=200)
+    df["event"] = [f"e{i % 50}" for i in range(200)]  # 4 filings each, none qualify
+    assert "By event" not in format_report(evaluate(df))
