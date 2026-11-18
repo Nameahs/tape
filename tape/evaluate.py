@@ -34,6 +34,7 @@ MARKET = "SPY"
 # Item codes a rule-writer would flag without any AI.
 RULE_ITEMS = {"1.01", "2.01", "2.02", "5.02"}
 BIG_MOVE = 0.03
+DAILY_PICKS = 10  # how many of each day's filings the top-10 hit rate assumes someone reads
 # Filings older than this are not priced on a normal run. One with a ticker Yahoo can't price
 # never gets an outcome, and without a bound it would drag the download window back forever.
 PRICE_LOOKBACK_DAYS = 30
@@ -194,6 +195,8 @@ class Report:
     median_latency_ms: float
     # Scores stored without a cost because Jev returned no token usage; left out of cost_per_filing_usd.
     cost_unknown: int = 0
+    # Event days with more than DAILY_PICKS filings, the only ones hit_rate_top10_daily is computed over.
+    top10_days: int = 0
 
     def to_json(self) -> str:
         # Undefined metrics (no rule flags, all scores tied, ...) are NaN in memory. Bare NaN tokens
@@ -272,10 +275,17 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
     order = _ranked(score)
     n = len(df)
 
-    daily_hits = []
+    # Only days with more filings than picks: on a thinner day the "top 10" is every filing, so Jev chose
+    # nothing and the day would just pull the rate toward the base rate. Picks are pooled across days,
+    # so a day with one filing can't weigh as much as a busy one.
+    hits = picks = top10_days = 0
     for _, g in df.groupby("event_day"):
-        top = g.nlargest(10, "materiality")
-        daily_hits.append((top["abs_ar"] > BIG_MOVE).mean())
+        if len(g) <= DAILY_PICKS:
+            continue
+        top = g.nlargest(DAILY_PICKS, "materiality")
+        hits += int((top["abs_ar"] > BIG_MOVE).sum())
+        picks += len(top)
+        top10_days += 1
 
     rng = np.random.default_rng(seed)
     rand_gaps, rand_rhos = [], []
@@ -310,7 +320,7 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
         gap_ci_low=ci_low,
         gap_ci_high=ci_high,
         spearman=spearman(score, move),
-        hit_rate_top10_daily=float(np.mean(daily_hits)),
+        hit_rate_top10_daily=hits / picks if picks else float("nan"),
         random_gap_ratio=float(np.nanmean(rand_gaps)),
         random_spearman=float(np.nanmean(rand_rhos)),
         rule_flagged=k,
@@ -321,6 +331,7 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
         cost_per_filing_usd=float(df["cost_usd"].mean()) if df["cost_usd"].notna().any() else float("nan"),
         median_latency_ms=float(df["latency_ms"].median()),
         cost_unknown=int(df["cost_usd"].isna().sum()),
+        top10_days=top10_days,
     )
 
 
@@ -335,7 +346,8 @@ def format_report(r: Report) -> str:
         f"Top 10% vs bottom 50%:  {r.top10_mean:.2%} vs {r.bottom50_mean:.2%}  = {fmt_metric(r.gap_ratio, '.2f', 'x')}"
         f"  ({_ci_text(r)}; random {fmt_metric(r.random_gap_ratio, '.2f', 'x')})",
         f"Spearman score vs move: {fmt_metric(r.spearman, '.3f')}  (random {fmt_metric(r.random_spearman, '.3f')})",
-        f"Top-10 daily picks moving > {BIG_MOVE:.0%}: {r.hit_rate_top10_daily:.0%}",
+        f"Top-{DAILY_PICKS} daily picks moving > {BIG_MOVE:.0%}: {fmt_metric(r.hit_rate_top10_daily, '.0%')}"
+        f"  ({r.top10_days} days with more than {DAILY_PICKS} filings)",
         f"Item-code rule flags {r.rule_flagged}: lift {fmt_metric(r.rule_lift, '.2f', 'x')}; "
         f"Jev top {r.rule_flagged}: lift {fmt_metric(r.jev_lift_same_budget, '.2f', 'x')}",
         f"Jev cost per filing: {_cost_text(r)}, median latency {r.median_latency_ms:.0f} ms",
