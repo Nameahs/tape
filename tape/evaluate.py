@@ -338,7 +338,7 @@ def format_report(r: Report) -> str:
         f"Top-10 daily picks moving > {BIG_MOVE:.0%}: {r.hit_rate_top10_daily:.0%}",
         f"Item-code rule flags {r.rule_flagged}: lift {fmt_metric(r.rule_lift, '.2f', 'x')}; "
         f"Jev top {r.rule_flagged}: lift {fmt_metric(r.jev_lift_same_budget, '.2f', 'x')}",
-        f"Jev cost per filing: {_cost_text(r)}, median latency {r.median_latency_ms:.0f} ms",
+        f"Jev cost per filing: {_cost_text(r)}, median latency {fmt_metric(r.median_latency_ms, '.0f', ' ms')}",
     ]
     return "\n".join(lines)
 

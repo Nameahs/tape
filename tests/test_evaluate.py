@@ -363,3 +363,18 @@ def test_format_report_omits_by_event_block_when_empty():
     df = _frame(signal=1.0, n=200)
     df["event"] = [f"e{i % 50}" for i in range(200)]  # 4 filings each, none qualify
     assert "By event" not in format_report(evaluate(df))
+
+
+def test_format_report_says_na_when_no_score_has_a_latency():
+    df = _frame(signal=1.0, n=200)
+    df["latency_ms"] = None
+    r = evaluate(df)
+    assert np.isnan(r.median_latency_ms)
+    text = format_report(r)
+    assert text.endswith("median latency n/a")
+    assert "nan" not in text
+    assert _strict_loads(r.to_json())["median_latency_ms"] is None
+
+
+def test_format_report_prints_median_latency_in_ms():
+    assert format_report(evaluate(_frame(signal=1.0, n=200))).endswith("median latency 120 ms")
