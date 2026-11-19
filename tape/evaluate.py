@@ -281,7 +281,9 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
     df = df.sort_values("accession_no", kind="stable").reset_index(drop=True)
     score, move = df["materiality"], df["abs_ar"]
 
-    bucket = score.round().clip(1, 5).astype(int)
+    # Round half up so each bucket covers [k - 0.5, k + 0.5). Series.round() rounds halves to even,
+    # which sends 2.5 down to 2 and 3.5 up to 4 and makes the middle buckets uneven.
+    bucket = np.floor(score + 0.5).clip(1, 5).astype(int)
     by_score = {
         str(k): {"n": int(len(g)), "mean_abs_ar": float(g.mean())} for k, g in move.groupby(bucket)
     }

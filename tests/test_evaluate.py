@@ -231,6 +231,13 @@ def test_evaluate_detects_signal():
     assert "Spearman" in text and "90% CI" in text
 
 
+def test_score_buckets_round_halves_up():
+    df = _frame(signal=0.0, n=40)
+    df["materiality"] = [1.5, 2.5, 3.5, 4.5] * 10
+    r = evaluate(df)
+    assert {k: v["n"] for k, v in r.by_score.items()} == {"2": 10, "3": 10, "4": 10, "5": 10}
+
+
 def test_evaluate_without_signal_looks_random():
     r = evaluate(_frame(signal=0.0))
     assert abs(r.spearman) < 0.15 and r.gap_ratio < 1.5
