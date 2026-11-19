@@ -167,7 +167,20 @@ def load_frame(conn: sqlite3.Connection) -> pd.DataFrame:
 
 
 def spearman(x: pd.Series, y: pd.Series) -> float:
+    """Rank correlation, or NaN when it is undefined.
+
+    A constant side has no rank order to correlate (an event group Jev scored all 1s, say), and
+    letting `corr` divide by its zero spread makes numpy print RuntimeWarnings for an expected case.
+    """
+    if x.nunique() < 2 or y.nunique() < 2:
+        return float("nan")
     return float(x.rank().corr(y.rank()))
+
+
+def _mean_defined(values: list[float]) -> float:
+    """Mean of the non-NaN values, or NaN (without numpy's empty-slice warning) when there are none."""
+    defined = [v for v in values if not math.isnan(v)]
+    return sum(defined) / len(defined) if defined else float("nan")
 
 
 def rule_flag(items: pd.Series) -> pd.Series:
@@ -321,8 +334,8 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
         gap_ci_high=ci_high,
         spearman=spearman(score, move),
         hit_rate_top10_daily=hits / picks if picks else float("nan"),
-        random_gap_ratio=float(np.nanmean(rand_gaps)),
-        random_spearman=float(np.nanmean(rand_rhos)),
+        random_gap_ratio=_mean_defined(rand_gaps),
+        random_spearman=_mean_defined(rand_rhos),
         rule_flagged=k,
         rule_lift=_lift(flag, move),
         jev_lift_same_budget=_lift(jev_flag, move),

@@ -1,4 +1,5 @@
 import json
+import warnings
 from datetime import date, datetime
 
 import numpy as np
@@ -246,6 +247,35 @@ def test_evaluate_needs_enough_rows():
 def test_rule_flag_and_spearman():
     assert rule_flag(pd.Series(["2.02,9.01", "8.01", None])).tolist() == [True, False, False]
     assert spearman(pd.Series([1, 2, 3]), pd.Series([10, 20, 30])) == pytest.approx(1.0)
+
+
+def test_spearman_is_nan_when_a_side_is_constant():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert np.isnan(spearman(pd.Series([1.0, 1.0, 1.0]), pd.Series([0.1, 0.2, 0.3])))
+        assert np.isnan(spearman(pd.Series([1.0, 2.0, 3.0]), pd.Series([0.2, 0.2, 0.2])))
+
+
+def test_evaluate_with_a_constant_score_event_group_does_not_warn():
+    df = _frame(signal=1.0, n=200)
+    df.loc[df["event"] == "other", "materiality"] = 1.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        r = evaluate(df)
+    assert np.isnan(r.by_event["other"]["spearman"])
+    assert not np.isnan(r.by_event["mna"]["spearman"])
+    assert not np.isnan(r.spearman)
+
+
+def test_evaluate_with_every_score_tied_does_not_warn():
+    df = _frame(signal=1.0, n=200)
+    df["materiality"] = 3.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        r = evaluate(df)
+    assert np.isnan(r.spearman) and np.isnan(r.random_spearman)
+    assert all(np.isnan(v["spearman"]) for v in r.by_event.values())
+    assert "n/a" in format_report(r)
 
 
 def test_bootstrap_ci_narrows_with_more_data():
