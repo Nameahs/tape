@@ -170,8 +170,8 @@ class Edgar:
     # Discovery ---------------------------------------------------------------------------
 
     def latest_8k(self) -> FeedPage:
-        xml = self.get(FEED_URL).text
-        return FeedPage(parse_feed(xml), len(feedparser.parse(xml).entries) >= FEED_SIZE)
+        entries = feedparser.parse(self.get(FEED_URL).text).entries
+        return FeedPage(_feed_refs(entries), len(entries) >= FEED_SIZE)
 
     def daily_8k(self, day: date) -> list[FilingRef] | None:
         """The 8-Ks in `day`'s index, or None if EDGAR has no index for that day. None is not the same
@@ -332,8 +332,12 @@ def parse_tickers(data: object) -> dict[str, str]:
 
 
 def parse_feed(xml: str) -> list[FilingRef]:
+    return _feed_refs(feedparser.parse(xml).entries)
+
+
+def _feed_refs(entries: list) -> list[FilingRef]:
     refs = []
-    for e in feedparser.parse(xml).entries:
+    for e in entries:
         m = _TITLE.match(e.get("title", ""))
         acc = _ACC.search(e.get("id", "") + " " + e.get("summary", ""))
         if not m or not acc or m["form"] != "8-K":  # skip 8-K/A amendments
