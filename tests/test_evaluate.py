@@ -285,6 +285,16 @@ def test_evaluate_with_every_score_tied_does_not_warn():
     assert "n/a" in format_report(r)
 
 
+def test_lift_is_nan_when_unflagged_filings_never_move():
+    df = _frame(signal=1.0, n=200)
+    rule = rule_flag(df["items"])
+    df.loc[~rule, ["abs_ar", "abnormal_return"]] = 0.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        r = evaluate(df)
+    assert np.isnan(r.rule_lift)
+
+
 def test_bootstrap_ci_narrows_with_more_data():
     small, large = _frame(signal=2.0, n=100), _frame(signal=2.0, n=2000)
     lo_s, hi_s = bootstrap_gap_ci(small["materiality"], small["abs_ar"])

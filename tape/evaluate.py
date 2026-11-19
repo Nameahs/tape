@@ -270,7 +270,8 @@ def bootstrap_gap_ci(score: pd.Series, move: pd.Series, resamples: int = 1000, l
 def _lift(flag: pd.Series, move: pd.Series) -> float:
     if flag.all() or not flag.any():
         return float("nan")
-    return float(move[flag].mean() / move[~flag].mean())
+    rest = move[~flag].mean()
+    return float(move[flag].mean() / rest) if rest else float("nan")
 
 
 def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
