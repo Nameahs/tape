@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from datetime import date
 from pathlib import Path
@@ -17,6 +18,7 @@ from tape.edgar import (
     FilingRef,
     IndexPageError,
     NotAnIndexPageError,
+    Throttle,
     is_outage,
     parse_feed,
     parse_form_index,
@@ -551,3 +553,72 @@ def test_parse_tickers_rejects_a_file_with_no_usable_rows():
         parse_tickers({})
     with pytest.raises(ValueError):
         parse_tickers({"0": {"cik_str": "x", "ticker": 5}})
+
+
+_real_sleep = time.sleep
+
+
+class FakeClock:
+    """Stands in for time.monotonic and time.sleep: sleeping advances the clock by the requested amount
+    but only really sleeps for a moment, long enough to let other threads run in between."""
+
+    def __init__(self, start: float = 100.0) -> None:
+        self.now = start
+        self.sleeps: list[float] = []
+        self.wakes: list[float] = []  # the time each sleeper asked to be woken at
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.wakes.append(self.now + seconds)
+        _real_sleep(0.001)
+        self.now += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    fake = FakeClock()
+    monkeypatch.setattr("tape.edgar.time.monotonic", fake.monotonic)
+    monkeypatch.setattr("tape.edgar.time.sleep", fake.sleep)
+    return fake
+
+
+def test_throttle_spaces_consecutive_waits(clock):
+    throttle = Throttle(per_second=5)
+    granted = []
+    for _ in range(4):
+        throttle.wait()
+        granted.append(clock.now)
+    assert granted == pytest.approx([100.0, 100.2, 100.4, 100.6])
+    assert clock.sleeps == pytest.approx([0.2, 0.2, 0.2])
+
+
+def test_throttle_does_not_sleep_once_the_interval_has_passed(clock):
+    throttle = Throttle(per_second=5)
+    throttle.wait()
+    clock.now += 0.5  # the caller did other work for longer than one interval
+    throttle.wait()
+    assert clock.sleeps == []
+    clock.now += 0.1  # but the next slot is still counted from the late call
+    throttle.wait()
+    assert clock.sleeps == pytest.approx([0.1])
+
+
+def test_throttle_gives_concurrent_callers_evenly_spaced_slots(clock):
+    throttle = Throttle(per_second=10)
+    start = threading.Barrier(8)
+
+    def worker():
+        start.wait()
+        throttle.wait()
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # The first caller goes straight through and each of the other seven is woken one interval after
+    # the one before it, so the eight requests are spread over 0.7s rather than sharing a slot.
+    assert sorted(clock.wakes) == pytest.approx([100.1, 100.2, 100.3, 100.4, 100.5, 100.6, 100.7])
