@@ -4,6 +4,7 @@ import time
 from datetime import date
 from pathlib import Path
 
+import feedparser
 import httpx
 import pytest
 import respx
@@ -418,6 +419,22 @@ def test_latest_8k_reports_a_full_feed_counting_every_entry(entries, full):
     respx.get(FEED_URL).respond(200, text=f'<feed xmlns="http://www.w3.org/2005/Atom">{body}</feed>')
     page = Edgar("ua", per_second=1000).latest_8k()
     assert page.refs == [] and page.full is full
+
+
+@respx.mock
+def test_latest_8k_parses_the_feed_once(monkeypatch):
+    calls = []
+    real_parse = feedparser.parse
+
+    def counting_parse(*args, **kwargs):
+        calls.append(args)
+        return real_parse(*args, **kwargs)
+
+    monkeypatch.setattr("tape.edgar.feedparser.parse", counting_parse)
+    respx.get(FEED_URL).respond(200, text=(FIX / "feed.atom").read_text())
+    page = Edgar("ua", per_second=1000).latest_8k()
+    assert [r.accession_no for r in page.refs] == ["0000000001-26-000101"] and page.full is False
+    assert len(calls) == 1
 
 
 def test_parse_feed_dedupes_co_registrants():
