@@ -98,7 +98,7 @@ The test: do higher Jev materiality scores line up with bigger next-day stock mo
 
 1. **Backfill.** Pull the last 3 months of 8-Ks for listed companies and score them all.
 2. **Event day.** The trading day the market first saw the filing (`accepted_at` before 4:00 pm ET on a trading day = same day, otherwise the next trading day).
-3. **Move.** Abnormal return = stock return minus S&P 500 return (SPY) on the event day. Use the absolute value, since a big drop matters as much as a big jump.
+3. **Move.** Abnormal return = stock return minus S&P 500 return (SPY) on the event day. Use the absolute value, since a big drop matters as much as a big jump. For the mean-based metrics (score buckets, gap ratio and its interval, lifts) it is capped at the 99th percentile of the evaluated sample, so one extreme move can't set a group's average on its own; the report says how many filings were capped.
 4. **Compare groups.** Average absolute abnormal return by materiality score, 1 through 5.
 
 **Baselines Jev has to beat.**
