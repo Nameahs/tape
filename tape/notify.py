@@ -8,7 +8,7 @@ import time
 import httpx
 
 API = "https://api.telegram.org/bot{token}/sendMessage"
-LIMIT = 4096  # Telegram's max message length
+LIMIT = 4096  # Telegram's max message length, in UTF-16 code units
 MAX_ATTEMPTS = 4  # per chunk, so one rate limit doesn't cut a digest off halfway
 MAX_RETRY_AFTER = 30.0  # never wait longer than this on one 429
 # Server-side failures worth another try. Telegram returns these during incidents and they usually clear
@@ -28,16 +28,34 @@ class PartialSend(httpx.HTTPError):
         self.total = total
 
 
+def _units(s: str) -> int:
+    """Length as Telegram counts it: UTF-16 code units, so a character outside the BMP (most emoji) is 2."""
+    return len(s) + sum(1 for ch in s if ord(ch) > 0xFFFF)
+
+
+def _fit(s: str, limit: int) -> int:
+    """How many leading characters of `s` fit in `limit` UTF-16 units, never splitting a surrogate pair.
+    At least 1, so a lone wide character can't stall a caller with a limit of 1.
+    """
+    n = 0
+    for i, ch in enumerate(s):
+        n += 2 if ord(ch) > 0xFFFF else 1
+        if n > limit:
+            return max(i, 1)
+    return len(s)
+
+
 def _pieces(line: str, limit: int) -> list[str]:
-    """Break one line into pieces of at most `limit`, at the last space before the limit where there is one.
-    The space a piece ends on is dropped; nothing else is lost.
+    """Break one line into pieces of at most `limit` UTF-16 units, at the last space before the limit where
+    there is one. The space a piece ends on is dropped; nothing else is lost.
     """
     out = []
-    while len(line) > limit:
-        cut = line.rfind(" ", 0, limit + 1)
+    while _units(line) > limit:
+        k = _fit(line, limit)
+        cut = line.rfind(" ", 0, k + 1)
         if cut <= 0:
-            out.append(line[:limit])
-            line = line[limit:]
+            out.append(line[:k])
+            line = line[k:]
         else:
             out.append(line[:cut])
             line = line[cut + 1:]
@@ -46,16 +64,19 @@ def _pieces(line: str, limit: int) -> list[str]:
 
 
 def chunks(text: str, limit: int = LIMIT) -> list[str]:
-    """Split on line breaks so no message exceeds Telegram's limit. A line longer than the limit is
-    spread over consecutive messages rather than cut short.
+    """Split on line breaks so no message exceeds Telegram's limit, measured in UTF-16 units as Telegram
+    does. A line longer than the limit is spread over consecutive messages rather than cut short.
     """
-    out, cur = [], ""
+    out, cur, used = [], "", 0
     for line in (p for raw in text.splitlines() for p in _pieces(raw, limit)):
-        if cur and len(cur) + 1 + len(line) > limit:
+        n = _units(line)
+        if cur and used + 1 + n > limit:
             out.append(cur)
-            cur = line
+            cur, used = line, n
+        elif cur:
+            cur, used = f"{cur}\n{line}", used + 1 + n
         else:
-            cur = f"{cur}\n{line}" if cur else line
+            cur, used = line, n
     if cur:
         out.append(cur)
     return out
