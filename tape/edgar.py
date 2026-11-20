@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
 import feedparser
@@ -335,6 +335,10 @@ def parse_feed(xml: str) -> list[FilingRef]:
     return _feed_refs(feedparser.parse(xml).entries)
 
 
+def _index_url(cik: int, accession: str) -> str:
+    return f"{SEC}/Archives/edgar/data/{cik}/{accession.replace('-', '')}/{accession}-index.htm"
+
+
 def _feed_refs(entries: list) -> list[FilingRef]:
     refs = []
     for e in entries:
@@ -342,7 +346,14 @@ def _feed_refs(entries: list) -> list[FilingRef]:
         acc = _ACC.search(e.get("id", "") + " " + e.get("summary", ""))
         if not m or not acc or m["form"] != "8-K":  # skip 8-K/A amendments
             continue
-        refs.append(FilingRef(acc[1], m["cik"], m["company"].strip(), m["form"], e.link))
+        link = e.get("link", "")
+        try:
+            parsed = urlsplit(link)
+            sec_link = parsed.scheme == "https" and parsed.netloc.lower() in {"www.sec.gov", "www.sec.gov:443"}
+        except ValueError:
+            sec_link = False
+        index_url = link if sec_link else _index_url(int(m["cik"]), acc[1])
+        refs.append(FilingRef(acc[1], m["cik"], m["company"].strip(), m["form"], index_url))
     return _dedupe(refs)
 
 
@@ -376,8 +387,7 @@ def _parse_index_line(line: str) -> FilingRef | None:
         return None
     acc_no = acc[1]
     cik = int(m["cik"])
-    folder = f"{SEC}/Archives/edgar/data/{cik}/{acc_no.replace('-', '')}"
-    return FilingRef(acc_no, f"{cik:010d}", company, "8-K", f"{folder}/{acc_no}-index.htm")
+    return FilingRef(acc_no, f"{cik:010d}", company, "8-K", _index_url(cik, acc_no))
 
 
 def _dedupe(refs: list[FilingRef]) -> list[FilingRef]:
