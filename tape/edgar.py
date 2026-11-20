@@ -37,6 +37,11 @@ TICKERS_URL = SEC + "/files/company_tickers.json"
 TICKERS_FILE = "company_tickers.json"
 TICKERS_MAX_AGE = 24 * 3600  # the SEC regenerates the file daily
 TICKERS_RETRY_AFTER = 300.0  # after a failed download, don't try again in this process for this long
+# After a failed refresh that fell back to a stale cache, skip the download in every process for this
+# long. Passes are separate processes, and each failed refresh can spend minutes in retries; a map a few
+# hours older than usual costs almost nothing, since tickers rarely change.
+TICKERS_STALE_RETRY_AFTER = 1800.0
+TICKERS_FAILED_FILE = TICKERS_FILE + ".failed"
 MAX_ATTEMPTS = 4
 MAX_RETRY_AFTER = 60.0  # never wait longer than this on one Retry-After
 # 429 and 503 mean slow down. 500, 502 and 504 come from EDGAR's front end during busy
@@ -222,11 +227,17 @@ class Edgar:
         fall back to a stale copy rather than losing tickers for the whole pass. A download that
         parses as JSON but isn't a ticker map (an error body served with a 200) counts as a
         failed refresh, and is never written to the cache.
+
+        A failed refresh with a stale copy is recorded next to the cache, and later processes use
+        the stale copy without asking again until TICKERS_STALE_RETRY_AFTER has passed.
         """
         path = self._cache_dir / TICKERS_FILE if self._cache_dir is not None else None
         cached = _cached_tickers(path) if path is not None else None
-        if path is not None and cached is not None and time.time() - path.stat().st_mtime < TICKERS_MAX_AGE:
-            return cached
+        if path is not None and cached is not None:
+            if time.time() - path.stat().st_mtime < TICKERS_MAX_AGE:
+                return cached
+            if _recent_refresh_failure(path.with_name(TICKERS_FAILED_FILE)):
+                return cached
         try:
             resp = self.get(TICKERS_URL)
             tickers = parse_tickers(resp.json())
@@ -234,9 +245,15 @@ class Edgar:
             if cached is None:
                 raise
             log.warning("ticker map refresh failed; using stale cache at %s", path, exc_info=True)
+            if path is not None:
+                _write_ticker_cache(path.with_name(TICKERS_FAILED_FILE), repr(time.time()))
             return cached
         if path is not None:
             _write_ticker_cache(path, resp.text)
+            try:
+                path.with_name(TICKERS_FAILED_FILE).unlink(missing_ok=True)
+            except OSError:
+                log.warning("could not clear the ticker refresh failure stamp in %s", path.parent)
         return tickers
 
     def fetch(self, ref: FilingRef, max_chars: int) -> Filing:
@@ -291,6 +308,19 @@ def _cached_tickers(path: Path) -> dict[str, str] | None:
     except ValueError:
         log.warning("ignoring ticker cache at %s: not a ticker map", path)
         return None
+
+
+def _recent_refresh_failure(stamp: Path) -> bool:
+    """Whether a ticker refresh failed less than TICKERS_STALE_RETRY_AFTER ago, per the stamp file.
+
+    The stamp holds the failure time rather than relying on its mtime, so a missing or unreadable
+    stamp, or one from the future (a clock step), simply allows a refresh.
+    """
+    try:
+        failed_at = float(stamp.read_text())
+    except (OSError, ValueError):
+        return False
+    return 0 <= time.time() - failed_at < TICKERS_STALE_RETRY_AFTER
 
 
 def _write_ticker_cache(path: Path, text: str) -> None:

@@ -12,6 +12,8 @@ import respx
 from tape.edgar import (
     FEED_SIZE,
     FEED_URL,
+    MAX_ATTEMPTS,
+    TICKERS_STALE_RETRY_AFTER,
     TICKERS_URL,
     Edgar,
     EdgarBlockedError,
@@ -390,6 +392,63 @@ def test_ticker_map_is_retried_after_a_failed_download(tmp_path, monkeypatch):
     clock[0] += 301
     assert edgar.ticker_for("0000000001") == "EXMP"
     assert route.call_count == 5
+
+
+def _stale_cache(tmp_path, now):
+    cache = tmp_path / "company_tickers.json"
+    cache.write_text('{"0": {"cik_str": 1, "ticker": "OLD", "title": "Example Corp"}}')
+    os.utime(cache, (now - 25 * 3600, now - 25 * 3600))
+    return cache
+
+
+@respx.mock
+def test_failed_refresh_with_stale_cache_backs_off_across_processes(tmp_path, monkeypatch):
+    monkeypatch.setattr("tape.edgar.time.sleep", lambda s: None)
+    now = time.time()
+    clock = [now]
+    monkeypatch.setattr("tape.edgar.time.time", lambda: clock[0])
+    _stale_cache(tmp_path, now)
+    route = respx.get(TICKERS_URL)
+    route.side_effect = [httpx.Response(503)] * MAX_ATTEMPTS + [httpx.Response(200, text=_tickers_text())]
+
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "OLD"
+    assert route.call_count == MAX_ATTEMPTS
+    # The next pass is a new process: it uses the stale map without asking the SEC again.
+    clock[0] += TICKERS_STALE_RETRY_AFTER - 1
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "OLD"
+    assert route.call_count == MAX_ATTEMPTS
+    # Once the back-off has passed, a pass tries again, and a success clears the stamp.
+    clock[0] += 2
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert route.call_count == MAX_ATTEMPTS + 1
+    assert not (tmp_path / "company_tickers.json.failed").exists()
+
+
+@respx.mock
+def test_failure_stamp_from_the_future_does_not_block_refresh(tmp_path):
+    _stale_cache(tmp_path, time.time())
+    (tmp_path / "company_tickers.json.failed").write_text(repr(time.time() + 3600))
+    route = respx.get(TICKERS_URL).respond(200, text=_tickers_text())
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_unreadable_failure_stamp_is_ignored(tmp_path):
+    _stale_cache(tmp_path, time.time())
+    (tmp_path / "company_tickers.json.failed").write_text("not a time")
+    route = respx.get(TICKERS_URL).respond(200, text=_tickers_text())
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_failure_stamp_does_not_block_a_cold_cache(tmp_path, monkeypatch):
+    # With no cached map there is nothing to fall back on, so the stamp must not stop a download.
+    (tmp_path / "company_tickers.json.failed").write_text(repr(time.time()))
+    route = respx.get(TICKERS_URL).respond(200, text=_tickers_text())
+    assert Edgar("ua", per_second=1000, cache_dir=tmp_path).ticker_for("0000000001") == "EXMP"
+    assert route.call_count == 1
 
 
 @respx.mock
