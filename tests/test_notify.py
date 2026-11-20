@@ -30,6 +30,42 @@ def test_chunks_breaks_overlong_line_at_a_space():
     assert parts[0] == "header" and parts[-1].endswith("\nfooter")
 
 
+def _utf16(s):
+    return len(s.encode("utf-16-le")) // 2
+
+
+def test_chunks_measures_utf16_units():
+    # Each line is 30 code points but 60 UTF-16 units; Telegram counts the latter.
+    line = "\U0001F4C8" * 30
+    text = "\n".join([line] * 10)
+    parts = chunks(text, limit=100)
+    assert all(_utf16(p) <= 100 for p in parts)
+    assert "\n".join(parts) == text
+    assert len(parts) == 10  # two 60-unit lines plus a newline is 121, over the limit
+
+
+def test_chunks_hard_cut_keeps_wide_characters_whole():
+    # Odd limit with only wide characters: a cut by units would land inside a surrogate pair.
+    line = "\U0001F680" * 12
+    parts = chunks(line, limit=5)
+    assert parts == ["\U0001F680" * 2] * 6
+    assert all(_utf16(p) <= 5 for p in parts)
+
+
+def test_chunks_emoji_heavy_digest_fits_telegram_limit():
+    lines = [f"ACME {i:03d} \U0001F4C8 guidance raised \U0001F680\U0001F680 {'x' * 40}" for i in range(200)]
+    lines.append("\U0001F4C9" * 3000)  # one overlong line with no spaces, 6,000 units
+    text = "\n".join(lines)
+    parts = chunks(text)
+    assert all(_utf16(p) <= 4096 for p in parts)
+    assert "".join(parts).replace("\n", "") == text.replace("\n", "")
+
+
+def test_chunks_ascii_unchanged_at_exact_limit():
+    assert chunks("a" * 4096) == ["a" * 4096]
+    assert chunks("a" * 4097) == ["a" * 4096, "a"]
+
+
 @respx.mock
 def test_send_telegram():
     route = respx.post(API.format(token="T")).respond(200, json={"ok": True})
