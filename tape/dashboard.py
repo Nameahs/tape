@@ -214,6 +214,15 @@ def _by_event_table(by_event: dict | None) -> str:
             '<th class="num">Rank correlation</th></tr>' + rows + "</table></div>")
 
 
+def _cap_note(report: dict) -> str:
+    """Says the means are capped and how many filings the cap touched; empty for reports without a cap."""
+    cap, capped = report.get("abs_ar_cap"), report.get("capped")  # absent in older reports
+    if not (isinstance(cap, (int, float)) and _is_number(cap) and math.isfinite(cap) and _is_number(capped)):
+        return ""
+    return (f'<p class="muted">Means cap |abnormal return| at {cap:.2%} '
+            f'({capped:,} filing{"s" if capped != 1 else ""} capped).</p>')
+
+
 def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=24)).isoformat()
@@ -253,6 +262,7 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
         eval_html = (
             f'<p class="muted">{report["n"]:,} filings with next-day prices. '
             'Higher scores should mean bigger moves.</p>'
+            + _cap_note(report)
             + _bar_chart(report["by_score"])
             + '<details><summary class="muted">Table view</summary><div class="scroll"><table>'
             '<tr><th>Score</th><th class="num">Filings</th><th class="num">Mean |abnormal return|</th></tr>'

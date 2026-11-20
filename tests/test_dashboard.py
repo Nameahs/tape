@@ -5,7 +5,9 @@ import pytest
 
 from tape import db
 from tape.dashboard import DAILY_SQL, SPEND_SQL, _daily, _daily_chart, _recent, build, write
+from tape.evaluate import evaluate
 from tests.conftest import make_filing, make_score
+from tests.test_evaluate import _frame
 
 NOW = datetime(2026, 10, 13, 22, 0, tzinfo=UTC)
 REPORT = {
@@ -309,3 +311,24 @@ def test_write_shows_event_table_from_a_report_on_disk(conn, tmp_path):
     path.write_text(json.dumps({**REPORT, "by_event": BY_EVENT}))
     html = write(conn, tmp_path / "dash.html", path).read_text()
     assert "Within each event type" in html and "No evaluation yet" not in html
+
+
+def test_build_says_means_are_capped(conn):
+    html = build(conn, {**REPORT, "abs_ar_cap": 0.142, "capped": 12}, NOW)
+    assert "Means cap |abnormal return| at 14.20% (12 filings capped)." in html
+    html = build(conn, {**REPORT, "abs_ar_cap": 0.05, "capped": 1}, NOW)
+    assert "(1 filing capped)" in html
+
+
+@pytest.mark.parametrize("extra", [{}, {"abs_ar_cap": None, "capped": 0}, {"abs_ar_cap": "x", "capped": 3}])
+def test_build_leaves_out_cap_note_without_a_usable_cap(extra, conn):
+    html = build(conn, {**REPORT, **extra}, NOW)
+    assert "Means cap" not in html
+    assert "n/a" not in html.split("Does a higher score")[1].split("Item-code rule")[0]
+
+
+def test_write_shows_cap_note_from_a_report_on_disk(conn, tmp_path):
+    report_path = tmp_path / "eval.json"
+    report_path.write_text(evaluate(_frame(signal=1.0, n=300)).to_json(), encoding="utf-8")
+    out = write(conn, tmp_path / "index.html", report_path)
+    assert "Means cap |abnormal return| at " in out.read_text(encoding="utf-8")
