@@ -39,6 +39,10 @@ DAILY_PICKS = 10  # how many of each day's filings the top-10 hit rate assumes s
 # never gets an outcome, and without a bound it would drag the download window back forever.
 PRICE_LOOKBACK_DAYS = 30
 MIN_OUTCOMES = 20  # below this the bucket means and the shuffled baseline are mostly noise
+# Mean-based metrics use |abnormal return| capped at this percentile of the evaluated sample. One
+# biotech readout or bad split adjustment would otherwise set a bucket's mean, or the top decile's,
+# on its own. Rank-based metrics (Spearman) and the big-move hit rate use the raw moves.
+WINSOR_PCT = 0.99
 
 
 # Scored filings with a ticker and no outcome, accepted at or after an instant. Unpriceable filings
@@ -210,6 +214,9 @@ class Report:
     cost_unknown: int = 0
     # Event days with more than DAILY_PICKS filings, the only ones hit_rate_top10_daily is computed over.
     top10_days: int = 0
+    # Cap applied to |abnormal return| before the mean-based metrics, and how many filings it cut down.
+    abs_ar_cap: float = float("nan")
+    capped: int = 0
 
     def to_json(self) -> str:
         # Undefined metrics (no rule flags, all scores tied, ...) are NaN in memory. Bare NaN tokens
@@ -274,13 +281,21 @@ def _lift(flag: pd.Series, move: pd.Series) -> float:
     return float(move[flag].mean() / rest) if rest else float("nan")
 
 
+def winsorize(move: pd.Series, pct: float = WINSOR_PCT) -> tuple[pd.Series, float, int]:
+    """`move` capped at its `pct` quantile, the cap, and how many values were above it."""
+    cap = float(move.quantile(pct))
+    over = int((move > cap).sum())
+    return move.clip(upper=cap), cap, over
+
+
 def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
     if len(df) < MIN_OUTCOMES:
         raise NotEnoughOutcomes(len(df))
     # A fixed row order, so the tie-breaking in the cuts below (and the shuffled baseline) doesn't
     # depend on how SQLite happened to return the rows.
     df = df.sort_values("accession_no", kind="stable").reset_index(drop=True)
-    score, move = df["materiality"], df["abs_ar"]
+    score, raw_move = df["materiality"], df["abs_ar"]
+    move, cap, capped = winsorize(raw_move)
 
     # Round half up so each bucket covers [k - 0.5, k + 0.5). Series.round() rounds halves to even,
     # which sends 2.5 down to 2 and 3.5 up to 4 and makes the middle buckets uneven.
@@ -308,7 +323,7 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
     for _ in range(shuffles):
         fake = pd.Series(rng.permutation(score.to_numpy()), index=score.index)
         rand_gaps.append(_gap(fake, move))
-        rand_rhos.append(spearman(fake, move))
+        rand_rhos.append(spearman(fake, raw_move))
 
     # Compare Jev to the rule at the same alert volume: flag Jev's top-k where k = rule's count.
     flag = rule_flag(df["items"])
@@ -321,7 +336,7 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
     by_event = {
         ev: {
             "n": int(len(g)),
-            "mean_abs_ar": float(g["abs_ar"].mean()),
+            "mean_abs_ar": float(move.loc[g.index].mean()),
             "spearman": spearman(g["materiality"], g["abs_ar"]),
         }
         for ev, g in df.groupby("event") if len(g) >= 5
@@ -335,7 +350,7 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
         gap_ratio=_gap(score, move),
         gap_ci_low=ci_low,
         gap_ci_high=ci_high,
-        spearman=spearman(score, move),
+        spearman=spearman(score, raw_move),
         hit_rate_top10_daily=hits / picks if picks else float("nan"),
         random_gap_ratio=_mean_defined(rand_gaps),
         random_spearman=_mean_defined(rand_rhos),
@@ -348,12 +363,15 @@ def evaluate(df: pd.DataFrame, shuffles: int = 200, seed: int = 7) -> Report:
         median_latency_ms=float(df["latency_ms"].median()),
         cost_unknown=int(df["cost_usd"].isna().sum()),
         top10_days=top10_days,
+        abs_ar_cap=cap,
+        capped=capped,
     )
 
 
 def format_report(r: Report) -> str:
     lines = [
         f"Filings evaluated: {r.n}",
+        _cap_text(r),
         "",
         "Mean |abnormal return| by materiality score",
         *(f"  {k}: {v['mean_abs_ar']:.2%}  (n={v['n']})" for k, v in sorted(r.by_score.items())),
@@ -382,6 +400,13 @@ def _by_event_lines(by_event: dict[str, dict[str, float]]) -> list[str]:
         f"  {ev}: {v['mean_abs_ar']:.2%} mean move, Spearman {fmt_metric(v['spearman'], '.2f')}  (n={v['n']})"
         for ev, v in events
     )]
+
+
+def _cap_text(r: Report) -> str:
+    if not math.isfinite(r.abs_ar_cap):
+        return "Means use uncapped |abnormal return|"
+    return (f"Means cap |abnormal return| at the {WINSOR_PCT * 100:.0f}th percentile ({r.abs_ar_cap:.2%}); "
+            f"{r.capped:,} filing{'s' if r.capped != 1 else ''} capped")
 
 
 def _ci_text(r: Report) -> str:

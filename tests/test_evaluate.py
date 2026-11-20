@@ -20,6 +20,7 @@ from tape.evaluate import (
     format_report,
     rule_flag,
     spearman,
+    winsorize,
 )
 from tests.conftest import make_filing, make_score
 
@@ -293,6 +294,35 @@ def test_lift_is_nan_when_unflagged_filings_never_move():
         warnings.simplefilter("error")
         r = evaluate(df)
     assert np.isnan(r.rule_lift)
+
+
+def test_winsorize_caps_only_the_tail():
+    move = pd.Series([0.01] * 99 + [1.5])
+    capped, cap, over = winsorize(move)
+    assert over == 1 and cap < 0.03
+    assert capped.max() == pytest.approx(cap)
+    assert (capped.iloc[:99] == move.iloc[:99]).all()
+
+
+def test_one_extreme_move_does_not_set_the_gap_ratio():
+    df = _frame(signal=1.0, n=300)
+    base = evaluate(df)
+    top = df["materiality"].idxmax()
+    df.loc[top, ["abs_ar", "abnormal_return"]] = 1.5  # a +150% buyout of a micro-cap
+    r = evaluate(df)
+    # Uncapped, this one row nearly doubles the gap ratio on this frame.
+    assert r.gap_ratio == pytest.approx(base.gap_ratio, rel=0.1)
+    assert r.jev_lift_same_budget == pytest.approx(base.jev_lift_same_budget, rel=0.1)
+    assert r.capped >= 1 and r.abs_ar_cap < 0.1
+    # Ranks don't see the size of the move, and the hit rate only asks whether it beat the threshold.
+    assert r.spearman == pytest.approx(base.spearman, abs=0.01)
+
+
+def test_format_report_says_how_many_moves_were_capped():
+    r = evaluate(_frame(signal=1.0, n=300))
+    text = format_report(r)
+    assert f"{r.capped:,} filings capped" in text and "99th percentile" in text
+    assert json.loads(r.to_json())["capped"] == r.capped
 
 
 def test_bootstrap_ci_narrows_with_more_data():
