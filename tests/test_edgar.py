@@ -22,6 +22,7 @@ from tape.edgar import (
     IndexPageError,
     NotAnIndexPageError,
     Throttle,
+    decode_document,
     is_outage,
     parse_feed,
     parse_form_index,
@@ -698,3 +699,44 @@ def test_throttle_gives_concurrent_callers_evenly_spaced_slots(clock):
     # The first caller goes straight through and each of the other seven is woken one interval after
     # the one before it, so the eight requests are spread over 0.7s rather than sharing a slot.
     assert sorted(clock.wakes) == pytest.approx([100.1, 100.2, 100.3, 100.4, 100.5, 100.6, 100.7])
+
+
+def _html(content: bytes, content_type: str = "text/html") -> httpx.Response:
+    return httpx.Response(200, content=content, headers={"content-type": content_type})
+
+
+def test_decode_document_reads_undeclared_windows_1252():
+    # As UTF-8, \xe9\xa0\x93 is one valid (and wrong) CJK character, and the rest are replacement chars.
+    resp = _html(b"<p>Caf\xe9\xa0\x93quoted\x94 \x97 Jos\xe9\x92s</p>")
+    assert decode_document(resp) == "<p>Caf\u00e9\u00a0\u201cquoted\u201d \u2014 Jos\u00e9\u2019s</p>"
+
+
+def test_decode_document_keeps_utf8():
+    text = "<p>Soci\u00e9t\u00e9 G\u00e9n\u00e9rale \u2014 \u201cquoted\u201d</p>"
+    assert decode_document(_html(text.encode("utf-8"))) == text
+
+
+def test_decode_document_honours_a_declared_charset():
+    assert decode_document(_html("<p>\u00c5re</p>".encode("utf-16"), "text/html; charset=utf-16")) == "<p>\u00c5re</p>"
+
+
+def test_decode_document_reads_declared_latin1_as_windows_1252():
+    # Browsers do the same: a page labelled Latin-1 with a 0x92 means a curly apostrophe, not a C1 control.
+    assert decode_document(_html(b"<p>CEO\x92s</p>", "text/html; charset=ISO-8859-1")) == "<p>CEO\u2019s</p>"
+
+
+def test_decode_document_falls_back_on_an_unknown_charset():
+    assert decode_document(_html(b"<p>caf\xe9</p>", "text/html; charset=x-made-up")) == "<p>caf\u00e9</p>"
+
+
+@respx.mock
+def test_fetch_decodes_a_windows_1252_filing():
+    _mock_filing(respx)
+    respx.get(f"{FOLDER}/exmp-20261013.htm").respond(
+        200, content=b"<html><body><p>Ren\xe9e Dupr\xe9\x92s appointment \x97 effective today.</p></body></html>",
+        headers={"content-type": "text/html"},
+    )
+    ref = FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX)
+    text = Edgar("ua", per_second=1000).fetch(ref, max_chars=100_000).clean_text
+    assert "Ren\u00e9e Dupr\u00e9\u2019s appointment \u2014 effective today." in text
+    assert "\ufffd" not in text

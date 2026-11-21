@@ -257,9 +257,9 @@ class Edgar:
         return tickers
 
     def fetch(self, ref: FilingRef, max_chars: int) -> Filing:
-        index = parse_index_page(self.get(ref.index_url).text, ref.index_url)
-        main_html = self.get(index.main_url).text if index.main_url else ""
-        exhibit_html = self.get(index.exhibit_url).text if index.exhibit_url else None
+        index = parse_index_page(decode_document(self.get(ref.index_url)), ref.index_url)
+        main_html = decode_document(self.get(index.main_url)) if index.main_url else ""
+        exhibit_html = decode_document(self.get(index.exhibit_url)) if index.exhibit_url else None
         text = build_state_text(main_html, exhibit_html, max_chars, index.exhibit_type)
         if not text.strip():
             # Nothing to score: no 8-K or EX-99 document on the index page, or only images. Raise so
@@ -276,6 +276,35 @@ class Edgar:
             ticker=self.ticker_for(ref.cik),
             clean_text=text,
         )
+
+
+# Charsets browsers read as Windows-1252, which agrees with them on every printable character and also
+# has the curly quotes and dashes filers paste from word processors in 0x80-0x9F.
+_CP1252_ALIASES = frozenset({"ascii", "us-ascii", "iso-8859-1", "iso8859-1", "latin-1", "latin1", "l1"})
+
+
+def decode_document(resp: httpx.Response) -> str:
+    """The text of a filing document or index page.
+
+    EDGAR serves documents as text/html without a charset, and filers don't all write UTF-8: many
+    documents carry Windows-1252 or Latin-1 bytes (a raw NBSP, curly quotes, an accented name). httpx
+    would decode those as UTF-8 with replacement characters, and a run of them can even form a valid
+    UTF-8 sequence for an unrelated character. So use the declared charset when there is one, else
+    UTF-8 if the bytes are valid UTF-8, else Windows-1252.
+    """
+    content = resp.content
+    declared = (resp.charset_encoding or "").strip().lower()
+    if declared in _CP1252_ALIASES:
+        declared = "cp1252"
+    if declared:
+        try:
+            return content.decode(declared, errors="replace")
+        except LookupError:
+            pass  # a charset Python doesn't know; work it out from the bytes instead
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("cp1252", errors="replace")
 
 
 def _retry_delay(resp: httpx.Response, attempt: int) -> float:
