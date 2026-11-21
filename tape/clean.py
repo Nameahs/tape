@@ -56,36 +56,65 @@ def html_to_text(html: str) -> str:
     # Inline XBRL wraps facts in hidden headers; drop them.
     for tag in soup.find_all(style=re.compile(r"display:\s*none", re.IGNORECASE)):
         tag.decompose()
-    if soup.find(_BLOCK_TAGS) is not None:
-        _flatten_table_rows(soup)
-        # Real HTML: a newline in the source is just whitespace, like a space. (A plain-text
-        # filing has no block tags, and there the newlines are the only structure we get.)
-        for node in soup.find_all(string=True):
-            if type(node) is NavigableString and "\n" in node and node.find_parent("pre") is None:
-                node.replace_with(node.replace("\r", " ").replace("\n", " "))
-        for tag in soup.find_all(_BLOCK_TAGS):
-            tag.insert_before("\n")
-            tag.insert_after("\n")
-    for br in soup.find_all("br"):
-        br.replace_with("\n")
-    text = _ZERO_WIDTH.sub("", soup.get_text())
+    # Real HTML: a newline in the source is just whitespace, like a space. (A plain-text filing
+    # has no block tags, and there the newlines are the only structure we get.)
+    is_html = soup.find(_BLOCK_TAGS) is not None
+    text = _ZERO_WIDTH.sub("", "".join(_text_pieces(soup, is_html)))
     lines = [_WS.sub(" ", line).strip() for line in text.splitlines()]
     text = "\n".join(line for line in lines if line)
     return _BLANKS.sub("\n\n", text).strip()
 
 
-def _flatten_table_rows(soup: BeautifulSoup) -> None:
-    """Put each data row of a table on one line, its non-empty cells joined by " | ".
+def _text_pieces(soup: BeautifulSoup, is_html: bool) -> list[str]:
+    """The document's text in one walk of the tree, with a newline around each block element and
+    for each <br>. A table row of plain cells comes out as one line (see `_flat_row`).
 
-    A row whose cells hold block content (a layout table wrapping paragraphs, or a nested table)
-    is left alone, so its paragraphs still come out one per line.
+    The tree is read, never edited: bs4's insert/replace find a node by a linear scan of its
+    parent's children, so editing a parent with thousands of block children is quadratic.
     """
-    for row in soup.find_all("tr"):
-        cells = row.find_all(_CELLS, recursive=False)
-        if not cells or any(cell.find(_BLOCK_TAGS) is not None for cell in cells):
+    strings = soup.interesting_string_types
+    pieces: list[str] = []
+    # Each entry is (children still to visit, closing piece, inside <pre>). An explicit stack, so
+    # deeply nested markup can't hit the recursion limit.
+    stack = [(iter(soup.contents), "", False)]
+    while stack:
+        children, closing, in_pre = stack[-1]
+        node = next(children, None)
+        if node is None:
+            stack.pop()
+            pieces.append(closing)
             continue
-        row.clear()
-        row.append(_join_cells(_cell_text(cell) for cell in cells))
+        if isinstance(node, Tag):
+            if node.name == "br":
+                pieces.append("\n")
+            elif is_html and node.name in _BLOCK_TAGS:
+                row = _flat_row(node) if node.name == "tr" else None
+                if row is not None:
+                    pieces += ("\n", row, "\n")
+                else:
+                    pieces.append("\n")
+                    stack.append((iter(node.contents), "\n", in_pre or node.name == "pre"))
+            else:
+                stack.append((iter(node.contents), "", in_pre))
+        elif type(node) in strings:  # what get_text() reads: no comments, doctypes, ...
+            text = str(node)
+            if is_html and not in_pre and type(node) is NavigableString and "\n" in text:
+                text = text.replace("\r", " ").replace("\n", " ")
+            pieces.append(text)
+    return pieces
+
+
+def _flat_row(row: Tag) -> str | None:
+    """A data row of a table as one line, its non-empty cells joined by " | ".
+
+    None for a row with no cells, or whose cells hold block content (a layout table wrapping
+    paragraphs, or a nested table): that row is walked like any other element, so its
+    paragraphs still come out one per line.
+    """
+    cells = row.find_all(_CELLS, recursive=False)
+    if not cells or any(cell.find(_BLOCK_TAGS) is not None for cell in cells):
+        return None
+    return _join_cells(_cell_text(cell) for cell in cells)
 
 
 def _cell_text(cell: Tag) -> str:
