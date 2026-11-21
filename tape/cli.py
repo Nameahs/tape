@@ -344,7 +344,11 @@ def cmd_dashboard(args, settings, conn) -> int:
 
 
 def _positive_int(value: str) -> int:
-    n = int(value)
+    try:
+        n = int(value)
+    except ValueError:
+        # Left to argparse, this reads "invalid _positive_int value", naming the helper instead of the problem.
+        raise argparse.ArgumentTypeError(f"expected a whole number, got {value!r}") from None
     if n < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
     return n

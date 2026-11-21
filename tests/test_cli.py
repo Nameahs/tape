@@ -194,6 +194,28 @@ def test_stats_rejects_zero_days(tmp_path, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize(
+    ("argv", "value"),
+    [
+        (["stats", "--days", "abc"], "abc"),
+        (["backfill", "--days", "1.5"], "1.5"),
+        (["digest", "--hours", ""], ""),
+        (["pending", "--max-age-hours", "24h"], "24h"),
+        (["evaluate", "--days", "ten"], "ten"),
+    ],
+)
+def test_non_numeric_windows_say_a_whole_number_is_expected(argv, value, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert f"expected a whole number, got {value!r}" in err
+    assert "_positive_int" not in err
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
     "argv",
     [
         ["backfill", "--days", "0"],
