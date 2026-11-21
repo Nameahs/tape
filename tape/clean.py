@@ -72,7 +72,8 @@ def _text_pieces(soup: BeautifulSoup, is_html: bool) -> list[str]:
     The tree is read, never edited: bs4's insert/replace find a node by a linear scan of its
     parent's children, so editing a parent with thousands of block children is quadratic.
     """
-    strings = soup.interesting_string_types
+    # The string types get_text() reads: text and CDATA, not comments, doctypes and the like.
+    strings = soup.interesting_string_types or {NavigableString}
     pieces: list[str] = []
     # Each entry is (children still to visit, closing piece, inside <pre>). An explicit stack, so
     # deeply nested markup can't hit the recursion limit.
@@ -96,7 +97,7 @@ def _text_pieces(soup: BeautifulSoup, is_html: bool) -> list[str]:
                     stack.append((iter(node.contents), "\n", in_pre or node.name == "pre"))
             else:
                 stack.append((iter(node.contents), "", in_pre))
-        elif type(node) in strings:  # what get_text() reads: no comments, doctypes, ...
+        elif type(node) in strings:
             text = str(node)
             if is_html and not in_pre and type(node) is NavigableString and "\n" in text:
                 text = text.replace("\r", " ").replace("\n", " ")
