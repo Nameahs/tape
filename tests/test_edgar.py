@@ -39,6 +39,16 @@ def test_parse_feed_skips_amendments():
     assert refs == [FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX)]
 
 
+@pytest.mark.parametrize("link", ["", '<link rel="alternate" href="https://example.org/filing"/>'])
+def test_parse_feed_reconstructs_unusable_index_url(link):
+    xml = f"""<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+    <title>8-K - Example Corp (0000000001) (Filer)</title>
+    <id>urn:tag:sec.gov,2008:accession-number=0000000001-26-000101</id>
+    {link}
+    </entry></feed>"""
+    assert parse_feed(xml) == [FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX)]
+
+
 def test_parse_form_index():
     refs = parse_form_index((FIX / "form.idx").read_text())
     assert [r.accession_no for r in refs] == ["0000000001-26-000101"]
