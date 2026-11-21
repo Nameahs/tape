@@ -222,7 +222,9 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         return cls(
-            db_path=Path(_str("TAPE_DB_PATH", str(cls.db_path))),
+            # Workspace secrets don't go through a shell, so a "~" would otherwise reach us literally
+            # and the first pass would create a fresh store in a folder named "~".
+            db_path=Path(_str("TAPE_DB_PATH", str(cls.db_path))).expanduser(),
             user_agent=_str("TAPE_USER_AGENT", cls.user_agent),
             jev_model=_str("TAPE_JEV_MODEL", cls.jev_model),
             max_chars=_int("TAPE_MAX_CHARS", cls.max_chars, minimum=1),

@@ -36,6 +36,12 @@ def test_string_settings_are_stripped(monkeypatch):
     assert str(s.db_path) == "/tmp/x.db"
 
 
+def test_db_path_expands_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("TAPE_DB_PATH", "~/tape/data/tape.db")
+    assert Settings.from_env().db_path == tmp_path / "tape" / "data" / "tape.db"
+
+
 def test_event_override_from_env(monkeypatch):
     monkeypatch.setenv("TAPE_BRIEF_NOW__EARNINGS_GUIDANCE", "4.5")
     monkeypatch.setenv("TAPE_DIGEST__ROUTINE_GOVERNANCE", "3.5")
