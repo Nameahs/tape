@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import bs4.element
 import pytest
 
 from tape.clean import build_state_text, drop_boilerplate, exhibit_label, html_to_text, items_in
@@ -253,3 +254,50 @@ def test_zero_width_and_unicode_spaced_cells_flatten_like_plain_ones():
         "<td>&#8203;412.5</td><td>&#xFEFF;</td><td> %</td></tr></table>"
     )
     assert html_to_text(html) == "Net sales | $412.5%"
+
+
+def test_pre_blocks_keep_their_source_lines():
+    html = "<p>Intro\ntext.</p><pre>Line one\n  Line two\n\nLine three</pre><p>After.</p>"
+    assert html_to_text(html).splitlines() == ["Intro text.", "Line one", "Line two", "Line three", "After."]
+
+
+def test_br_breaks_a_line_in_html_and_plain_text():
+    assert html_to_text("<p>Acme Corp.<br>Investor Relations<br/>(555) 010-0100</p>").splitlines() == [
+        "Acme Corp.", "Investor Relations", "(555) 010-0100",
+    ]
+    assert html_to_text("Dividend declared<br>Payable May 1").splitlines() == [
+        "Dividend declared", "Payable May 1",
+    ]
+
+
+def _sibling_heavy_doc(blocks: int) -> str:
+    paras = "".join(f"<p>Paragraph {i} of the\nrelease.</p>" for i in range(blocks))
+    rows = "".join(f"<tr><td>Item {i}</td><td>$</td><td>1,234</td><td>(56</td><td>)</td></tr>" for i in range(blocks))
+    return f"<html><body>{paras}<table>{rows}</table><span style='display:none'>hidden</span></body></html>"
+
+
+def test_html_to_text_does_not_scan_siblings_per_block(monkeypatch):
+    # bs4 locates a node for insert/replace/extract with Tag.index, a linear scan of the parent's
+    # children. Calling it once per block made big exhibits quadratic (a 4 MB filing took ~13 s),
+    # so the number of scans must not grow with the document.
+    calls = 0
+    index = bs4.element.Tag.index
+
+    def counting_index(self, element):
+        nonlocal calls
+        calls += 1
+        return index(self, element)
+
+    monkeypatch.setattr(bs4.element.Tag, "index", counting_index)
+    counts = []
+    for blocks in (100, 400):
+        calls = 0
+        text = html_to_text(_sibling_heavy_doc(blocks))
+        counts.append(calls)
+        assert text.splitlines()[-1] == f"Item {blocks - 1} | $1,234 | (56)"
+    assert counts[0] == counts[1] <= 5
+
+
+def test_html_to_text_handles_deep_nesting():
+    html = "<div>" * 5000 + "<p>Deep.</p>" + "</div>" * 5000
+    assert html_to_text(html) == "Deep."
