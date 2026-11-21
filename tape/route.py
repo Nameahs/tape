@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+
 from tape.config import Thresholds
-from tape.db import ScoreRow
 
 NOW, DIGEST, LOG = "now", "digest", "log"
 
 
-def route(s: ScoreRow, t: Thresholds) -> str:
+class Routable(Protocol):
+    """The parts of a score routing reads. A ScoreRow is one; so is anything holding just these columns."""
+
+    @property
+    def materiality(self) -> float: ...
+    @property
+    def surprise(self) -> float: ...
+    @property
+    def boilerplate(self) -> float: ...
+    @property
+    def event(self) -> str | None: ...
+
+
+def route(s: Routable, t: Thresholds) -> str:
     t = t.for_event(s.event)
     if s.boilerplate > t.boilerplate:
         return LOG

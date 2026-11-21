@@ -887,3 +887,31 @@ def test_summary_and_log_leave_out_unknown_cost_when_every_cost_is_known(conn, c
     assert stats.scored == 1 and stats.cost_unknown == 0
     assert "cost_unknown" not in stats.summary()
     assert "no token usage" not in caplog.text
+
+
+def test_reroute_reads_only_the_columns_routing_needs(conn):
+    _seed_routes(conn, [(4.2, "now"), (3.0, "digest")])
+    statements = []
+    conn.set_trace_callback(statements.append)
+    try:
+        report = rescore_routes(conn, Settings(thresholds=Thresholds(brief_now=4.5)))
+    finally:
+        conn.set_trace_callback(None)
+
+    assert report.moves == {("now", "digest"): 1}
+    reads = [q for q in statements if "FROM scores" in q]
+    assert reads
+    assert not any("raw_json" in q or "materiality_probs" in q or "s.*" in q for q in reads)
+
+
+def test_reroute_applies_per_event_overrides(conn):
+    f = make_filing(1)
+    db.upsert_filing(conn, f)
+    db.upsert_score(conn, make_score(f.accession_no, 4.2, surprise=0.0, event="earnings_guidance"))
+    db.set_route(conn, f.accession_no, "now")
+    conn.commit()
+
+    report = rescore_routes(conn, Settings(thresholds=Thresholds(overrides={"earnings_guidance": {"brief_now": 4.5}})))
+
+    assert report.moves == {("now", "digest"): 1}
+    assert _routes(conn)[f.accession_no] == "digest"

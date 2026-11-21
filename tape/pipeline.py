@@ -9,6 +9,7 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
+from typing import NamedTuple
 
 import httpx
 
@@ -311,22 +312,34 @@ class RerouteReport:
         return sum(self.moves.values())
 
 
+class _Routing(NamedTuple):
+    materiality: float
+    surprise: float
+    boilerplate: float
+    event: str | None
+
+
 def rescore_routes(conn: sqlite3.Connection, settings: Settings, *, dry_run: bool = False) -> RerouteReport:
     """Re-apply thresholds to stored scores (after tuning) without calling Jev again. With dry_run the
     report is computed against the stored routes and nothing is written, so a cutoff can be previewed.
     """
     report = RerouteReport()
+    # Only what route() reads: raw_json holds Jev's whole response for every score, and a reroute over a
+    # backfilled store would otherwise load all of it to look at four numbers.
     rows = conn.execute(
-        "SELECT s.*, b.route AS old_route FROM scores s LEFT JOIN briefs b USING (accession_no)"
+        """
+        SELECT s.accession_no, s.materiality, s.surprise, s.boilerplate, s.event, b.route AS old_route
+        FROM scores s LEFT JOIN briefs b USING (accession_no)
+        """
     ).fetchall()
     for row in rows:
-        s = db.ScoreRow(**{k: row[k] for k in row.keys() if k not in ("scored_at", "old_route")})
+        s = _Routing(row["materiality"], row["surprise"], row["boilerplate"], row["event"])
         r = route(s, settings.thresholds)
         report.totals[r] += 1
         if r != row["old_route"]:
             report.moves[(row["old_route"], r)] += 1
             if not dry_run:
-                db.set_route(conn, s.accession_no, r)
+                db.set_route(conn, row["accession_no"], r)
     if not dry_run:
         conn.commit()
     return report
