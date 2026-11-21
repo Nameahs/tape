@@ -253,3 +253,17 @@ def test_zero_width_and_unicode_spaced_cells_flatten_like_plain_ones():
         "<td>&#8203;412.5</td><td>&#xFEFF;</td><td> %</td></tr></table>"
     )
     assert html_to_text(html) == "Net sales | $412.5%"
+
+
+def test_pre_blocks_keep_their_source_lines():
+    html = "<p>Intro\ntext.</p><pre>Line one\n  Line two\n\nLine three</pre><p>After.</p>"
+    assert html_to_text(html).splitlines() == ["Intro text.", "Line one", "Line two", "Line three", "After."]
+
+
+def test_br_breaks_a_line_in_html_and_plain_text():
+    assert html_to_text("<p>Acme Corp.<br>Investor Relations<br/>(555) 010-0100</p>").splitlines() == [
+        "Acme Corp.", "Investor Relations", "(555) 010-0100",
+    ]
+    assert html_to_text("Dividend declared<br>Payable May 1").splitlines() == [
+        "Dividend declared", "Payable May 1",
+    ]
