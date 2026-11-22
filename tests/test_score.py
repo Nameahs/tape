@@ -21,6 +21,7 @@ from tape.score import (
     OUTAGE_STOP_AFTER,
     QUESTIONS,
     InvalidAnswerError,
+    _confidence,
     _level_probs,
     is_outage,
     score_many,
@@ -158,6 +159,41 @@ def test_level_probs_drops_unknown_levels(caplog):
     with caplog.at_level("WARNING", logger="tape.score"):
         assert json.loads(_level_probs(answer)) == [0.5, 0.3, 0.0, 0.0, 0.0]
     assert "unknown levels" in caplog.text and "'5'" in caplog.text and "'high'" in caplog.text
+
+
+def test_score_one_keeps_the_score_when_side_data_is_impossible(conn):
+    class Odd(FakeJev):
+        def system_one(self, state, questions, *, model=None):
+            resp = super().system_one(state, questions, model=model)
+            resp.answers["event"].confidence = float("nan")
+            resp.answers["materiality"].probabilities = {0: 0.5, 4: 1.5}
+            return resp
+
+    s = score_one(Odd(), _row(conn, clean_text="The CEO tendered her resignation."), "m", 0.042)
+    assert s.materiality == 4.6 and s.event == "leadership_change"
+    assert s.event_confidence is None and s.materiality_probs is None
+    assert (s.materiality_confidence, s.direction_confidence) == (0.7, 0.8)
+
+
+@pytest.mark.parametrize("value", [1.7, -0.2, float("nan"), float("inf"), "high"])
+def test_level_probs_drops_the_list_for_an_impossible_probability(caplog, value):
+    answer = type("A", (), {"probabilities": {0: 0.5, 1: value}})()
+    with caplog.at_level("WARNING", logger="tape.score"):
+        assert _level_probs(answer) is None
+    assert "outside 0..1" in caplog.text
+
+
+@pytest.mark.parametrize("value", [1.7, -0.2, float("nan"), float("-inf"), "sure"])
+def test_confidence_drops_an_impossible_value(caplog, value):
+    answer = type("A", (), {"confidence": value})()
+    with caplog.at_level("WARNING", logger="tape.score"):
+        assert _confidence(answer) is None
+    assert "outside 0..1" in caplog.text
+
+
+@pytest.mark.parametrize("value", [0, 1, 0.123456])
+def test_confidence_keeps_the_ends_of_the_range(value):
+    assert _confidence(type("A", (), {"confidence": value})()) == round(value, 4)
 
 
 def test_score_many_skips_failures(conn):
