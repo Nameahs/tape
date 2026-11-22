@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import time
 
@@ -161,5 +162,7 @@ def _retry_after(resp: httpx.Response, attempt: int) -> float:
     try:
         delay = float(resp.json()["parameters"]["retry_after"])
     except (ValueError, KeyError, TypeError):
+        delay = float(2**attempt)
+    if not math.isfinite(delay):  # json() accepts NaN/Infinity, and time.sleep(nan) raises
         delay = float(2**attempt)
     return min(max(delay, 0.0), MAX_RETRY_AFTER)

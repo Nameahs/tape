@@ -125,6 +125,17 @@ def test_send_telegram_backs_off_without_retry_after(sleeps):
     assert sleeps == [1.0]
 
 
+@pytest.mark.parametrize("value", [b"NaN", b"Infinity", b"-Infinity"])
+@respx.mock
+def test_send_telegram_backs_off_on_non_finite_retry_after(sleeps, value):
+    # httpx's json() accepts these literals; time.sleep(nan) would raise ValueError.
+    ok = httpx.Response(200, json={"ok": True})
+    body = b'{"ok": false, "parameters": {"retry_after": ' + value + b"}}"
+    respx.post(API.format(token="T")).mock(side_effect=[httpx.Response(429, content=body), ok])
+    send_telegram("hi", token="T", chat_id="42", client=httpx.Client())
+    assert sleeps == [1.0]
+
+
 @respx.mock
 def test_send_telegram_raises_after_retry_limit(sleeps):
     route = respx.post(API.format(token="T")).mock(return_value=_rate_limited(1))
