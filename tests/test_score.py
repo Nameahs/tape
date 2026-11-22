@@ -20,6 +20,7 @@ from tape.score import (
     MATERIALITY_LEVELS,
     OUTAGE_STOP_AFTER,
     QUESTIONS,
+    InvalidAnswerError,
     _level_probs,
     is_outage,
     score_many,
@@ -99,6 +100,49 @@ def test_score_one_with_zero_tokens_costs_zero(conn):
             return resp
 
     assert score_one(Empty(), _row(conn), "m", 0.042).cost_usd == 0.0
+
+
+class Answering(FakeJev):
+    """FakeJev with one answer field overridden, e.g. Answering("materiality", "score", 9.0)."""
+
+    def __init__(self, question, attr, value):
+        super().__init__()
+        self.question, self.attr, self.value = question, attr, value
+
+    def system_one(self, state, questions, *, model=None):
+        resp = super().system_one(state, questions, model=model)
+        setattr(resp.answers[self.question], self.attr, self.value)
+        return resp
+
+
+@pytest.mark.parametrize("question, attr, value", [
+    ("materiality", "score", 4.01),
+    ("materiality", "score", -0.5),
+    ("materiality", "score", float("nan")),
+    ("event", "choice", "bogus"),
+    ("event", "choice", None),
+    ("direction", "choice", "sideways"),
+    ("surprise", "noul", 1.5),
+    ("boilerplate", "noul", -0.1),
+], ids=repr)
+def test_score_one_rejects_answers_outside_the_question(conn, question, attr, value):
+    with pytest.raises(InvalidAnswerError, match=question):
+        score_one(Answering(question, attr, value), _row(conn), "m", 0.042)
+
+
+@pytest.mark.parametrize("question, attr, value, field, stored", [
+    ("materiality", "score", 0.0, "materiality", 1.0),
+    ("materiality", "score", 4.0, "materiality", 5.0),
+    ("surprise", "noul", 1.0, "surprise", 1.0),
+    ("boilerplate", "noul", 0.0, "boilerplate", 0.0),
+])
+def test_score_one_accepts_the_ends_of_each_scale(conn, question, attr, value, field, stored):
+    s = score_one(Answering(question, attr, value), _row(conn), "m", 0.042)
+    assert getattr(s, field) == stored
+
+
+def test_an_invalid_answer_is_not_an_outage():
+    assert not is_outage(InvalidAnswerError("x"))
 
 
 def test_level_probs_keeps_each_probability_at_its_level():
