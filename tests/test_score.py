@@ -103,6 +103,34 @@ def test_score_one_with_zero_tokens_costs_zero(conn):
     assert score_one(Empty(), _row(conn), "m", 0.042).cost_usd == 0.0
 
 
+class Usage(FakeJev):
+    def __init__(self, input_tokens):
+        super().__init__()
+        self.input_tokens = input_tokens
+
+    def system_one(self, state, questions, *, model=None):
+        resp = super().system_one(state, questions, model=model)
+        resp.usage = SimpleNamespace(input_tokens=self.input_tokens, output_tokens=5)
+        return resp
+
+
+@pytest.mark.parametrize("tokens", [-120, 12.5, float("nan"), float("inf"), "812", True])
+def test_score_one_treats_an_impossible_token_count_as_unknown_cost(conn, caplog, tokens):
+    s = score_one(Usage(tokens), _row(conn), "m", 0.042)
+    assert s.input_tokens is None and s.cost_usd is None
+    assert "Ignoring input_tokens" in caplog.text
+    db.upsert_score(conn, s)
+    stored = conn.execute("SELECT input_tokens, cost_usd FROM scores WHERE accession_no = ?",
+                          (s.accession_no,)).fetchone()
+    assert tuple(stored) == (None, None)
+
+
+def test_score_one_accepts_a_whole_token_count_sent_as_a_float(conn):
+    s = score_one(Usage(1000.0), _row(conn), "m", 0.042)
+    assert s.input_tokens == 1000 and isinstance(s.input_tokens, int)
+    assert s.cost_usd == pytest.approx(0.000042)
+
+
 class Answering(FakeJev):
     """FakeJev with one answer field overridden, e.g. Answering("materiality", "score", 9.0)."""
 
