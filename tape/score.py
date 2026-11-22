@@ -112,21 +112,43 @@ def _level_probs(answer: Any) -> str | None:
     return json.dumps(levels)
 
 
+class InvalidAnswerError(ValueError):
+    """Jev answered a question with a value outside its scale or choices.
+
+    The SDK checks types, not ranges, so a materiality of 9 or an event label we never offered would
+    otherwise be stored and routed like any other score. It isn't an outage: the filing counts an attempt.
+    """
+
+
+def _in_range(name: str, value: Any, low: float, high: float) -> float:
+    number = float(value)
+    if not low <= number <= high:  # also false for NaN
+        raise InvalidAnswerError(f"Jev's {name} answer {number!r} is outside {low:g}..{high:g}")
+    return number
+
+
+def _one_of(name: str, value: Any, choices: dict[str, str]) -> str:
+    if value not in choices:
+        raise InvalidAnswerError(f"Jev's {name} answer {value!r} is not one of {', '.join(choices)}")
+    return value
+
+
 def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float) -> ScoreRow:
     started = time.perf_counter()
     resp = client.system_one(state_for(row), QUESTIONS, model=model)
     latency_ms = (time.perf_counter() - started) * 1000
     a = resp.answers
     input_tokens = getattr(resp.usage, "input_tokens", None)
+    # Jev's expected score runs 0..4 for five levels; store it as 1..5.
+    materiality = _in_range("materiality", a["materiality"].score, 0.0, len(MATERIALITY_LEVELS) - 1.0)
     return ScoreRow(
         accession_no=row["accession_no"],
         model=resp.model,
-        # Jev's expected score runs 0..4 for five levels; store it as 1..5.
-        materiality=round(float(a["materiality"].score) + 1.0, 4),
-        event=a["event"].choice,
-        direction=a["direction"].choice,
-        surprise=float(a["surprise"].noul),
-        boilerplate=float(a["boilerplate"].noul),
+        materiality=round(materiality + 1.0, 4),
+        event=_one_of("event", a["event"].choice, EVENTS),
+        direction=_one_of("direction", a["direction"].choice, DIRECTIONS),
+        surprise=_in_range("surprise", a["surprise"].noul, 0.0, 1.0),
+        boilerplate=_in_range("boilerplate", a["boilerplate"].noul, 0.0, 1.0),
         raw_json=_raw_json(resp),
         input_tokens=input_tokens,
         # No usage means we don't know what the call cost; NULL keeps it out of totals instead of reading as free.

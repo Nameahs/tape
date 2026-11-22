@@ -606,6 +606,28 @@ def test_score_and_route_stops_retrying_a_filing_jev_keeps_rejecting(conn, caplo
     assert f"giving up on {stuck.accession_no}" in caplog.text
 
 
+def test_score_and_route_never_stores_an_answer_off_jevs_scale(conn):
+    class OffScale(FakeJev):
+        def system_one(self, state, questions, *, model=None):
+            resp = super().system_one(state, questions, model=model)
+            if "off scale" in state["text"]:
+                resp.answers["materiality"].score = 9.0
+            return resp
+
+    bad, fine = make_filing(1, clean_text="off scale"), make_filing(2, clean_text="fine")
+    for f in (bad, fine):
+        db.upsert_filing(conn, f)
+    conn.commit()
+
+    for _ in range(db.MAX_SCORE_ATTEMPTS):
+        score_and_route(conn, OffScale(), Settings(), PassStats())
+
+    assert [r["accession_no"] for r in conn.execute("SELECT accession_no FROM scores")] == [fine.accession_no]
+    [row] = db.given_up(conn)
+    assert row["accession_no"] == bad.accession_no
+    assert row["last_error"].startswith("InvalidAnswerError: Jev's materiality answer 9.0")
+
+
 def _api_error(status):
     return TypeSafeAPIError(status, None, httpx.Headers())
 
