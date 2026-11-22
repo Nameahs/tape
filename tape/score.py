@@ -81,9 +81,28 @@ def _raw_json(resp: Any) -> str:
     return dump() if callable(dump) else json.dumps(resp, default=str)
 
 
+def _probability(value: Any) -> float | None:
+    """value as a float if it is a finite number in 0..1, else None."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if 0.0 <= number <= 1.0 else None  # also false for NaN
+
+
 def _confidence(answer: Any) -> float | None:
+    """Jev's confidence in one answer, or None if it gave none or an impossible one.
+
+    Side data, unlike the answer itself: a bad value is dropped with a warning rather than failing the filing.
+    """
     value = getattr(answer, "confidence", None)
-    return None if value is None else round(float(value), 4)
+    if value is None:
+        return None
+    number = _probability(value)
+    if number is None:
+        log.warning("Ignoring confidence %r outside 0..1", value)
+        return None
+    return round(number, 4)
 
 
 def _level_probs(answer: Any) -> str | None:
@@ -91,7 +110,8 @@ def _level_probs(answer: Any) -> str | None:
 
     The typed SDK keys them by int, the wire format by string; accept either. The list always has one entry per
     level, so a sparse answer that leaves a level out can't shift the later levels down: missing levels are 0.0
-    and keys outside Jev's 0..4 range are dropped.
+    and keys outside Jev's 0..4 range are dropped. If any level's probability isn't a number in 0..1 the whole
+    list is dropped: json.dumps would write NaN or Infinity as tokens most JSON readers reject.
     """
     probs = getattr(answer, "probabilities", None)
     if not probs:
@@ -104,7 +124,11 @@ def _level_probs(answer: Any) -> str | None:
         except (TypeError, ValueError):
             index = -1
         if 0 <= index < len(levels):
-            levels[index] = round(float(p), 4)
+            number = _probability(p)
+            if number is None:
+                log.warning("Ignoring materiality probabilities: level %s has %r, outside 0..1", key, p)
+                return None
+            levels[index] = round(number, 4)
         else:
             unexpected.append(key)
     if unexpected:
