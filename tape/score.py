@@ -136,6 +136,24 @@ def _level_probs(answer: Any) -> str | None:
     return json.dumps(levels)
 
 
+def _token_count(usage: Any) -> int | None:
+    """Jev's input token count, or None if it reported none or an impossible one.
+
+    A negative or fractional count would be priced into a negative or nonsense cost and summed into the spend
+    totals, so it is treated like a missing usage block: unknown cost, with a warning. JSON may carry a whole
+    number as 812.0, so integral floats are accepted.
+    """
+    value = getattr(usage, "input_tokens", None)
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    if isinstance(value, float) and value.is_integer() and value >= 0:  # is_integer() is false for NaN and inf
+        return int(value)
+    log.warning("Ignoring input_tokens %r: not a non-negative whole number", value)
+    return None
+
+
 class InvalidAnswerError(ValueError):
     """Jev answered a question with a value outside its scale or choices.
 
@@ -162,7 +180,7 @@ def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float)
     resp = client.system_one(state_for(row), QUESTIONS, model=model)
     latency_ms = (time.perf_counter() - started) * 1000
     a = resp.answers
-    input_tokens = getattr(resp.usage, "input_tokens", None)
+    input_tokens = _token_count(resp.usage)
     # Jev's expected score runs 0..4 for five levels; store it as 1..5.
     materiality = _in_range("materiality", a["materiality"].score, 0.0, len(MATERIALITY_LEVELS) - 1.0)
     return ScoreRow(
@@ -175,7 +193,8 @@ def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float)
         boilerplate=_in_range("boilerplate", a["boilerplate"].noul, 0.0, 1.0),
         raw_json=_raw_json(resp),
         input_tokens=input_tokens,
-        # No usage means we don't know what the call cost; NULL keeps it out of totals instead of reading as free.
+        # No usable count means we don't know what the call cost; NULL keeps it out of totals instead of reading
+        # as free.
         cost_usd=None if input_tokens is None else input_tokens * price_per_m / 1_000_000,
         latency_ms=round(latency_ms, 1),
         materiality_confidence=_confidence(a["materiality"]),
