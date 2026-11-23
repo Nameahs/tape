@@ -458,6 +458,11 @@ def main(argv: list[str] | None = None) -> int:
     except db.StoreNotFound as e:
         print(f"error: no Tape store at {e}; check TAPE_DB_PATH, or run tape init to create one", file=sys.stderr)
         return 2
+    except db.StoreTooNew as e:
+        # Usually a rolled-back deploy: the newer Tape already migrated the store, and this one can't read it.
+        print(f"error: the Tape store at {settings.db_path} has schema version {e.version}, newer than this "
+              f"Tape knows ({e.known}); upgrade Tape to use it", file=sys.stderr)
+        return 2
 
 
 def _run_locked(args, settings, conn, busy_exit: int) -> int:

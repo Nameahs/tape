@@ -216,6 +216,19 @@ class StoreNotFound(Exception):
     """connect(create=False) found no database at the path."""
 
 
+class StoreTooNew(Exception):
+    """The store's schema is newer than any this version of Tape knows: a newer Tape has migrated it.
+
+    Running on would read and write columns this code was never tested against, so callers should stop and
+    report the mismatch (usually a rolled-back deploy) instead.
+    """
+
+    def __init__(self, version: int, known: int) -> None:
+        super().__init__(f"store schema is version {version}, but this Tape only knows up to {known}")
+        self.version = version
+        self.known = known
+
+
 def connect(path: Path | str, create: bool = True) -> sqlite3.Connection:
     """Open the store and bring its schema up to date. With create=False a missing database raises
     StoreNotFound instead of being created, along with any folders leading to it.
@@ -226,21 +239,38 @@ def connect(path: Path | str, create: bool = True) -> sqlite3.Connection:
             raise StoreNotFound(str(path))
         path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.executescript(SCHEMA)
-    migrate(conn)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Before SCHEMA: its CREATE IF NOT EXISTS would put back a table a newer Tape had dropped.
+        _check_version(conn)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.executescript(SCHEMA)
+        migrate(conn)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
 def migrate(conn: sqlite3.Connection) -> int:
-    """Apply any MIGRATIONS this database hasn't seen yet. Returns the resulting schema version."""
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    """Apply any MIGRATIONS this database hasn't seen yet. Returns the resulting schema version.
+
+    Raises StoreTooNew, changing nothing, if a newer Tape has already taken the store past MIGRATIONS.
+    """
+    version = _check_version(conn)
     for target, script in enumerate(MIGRATIONS[version:], start=version + 1):
         # executescript commits first, so wrap each step ourselves: a failed ALTER leaves the version alone.
         conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {target};\nCOMMIT;")
-    return max(version, len(MIGRATIONS))
+    return len(MIGRATIONS)
+
+
+def _check_version(conn: sqlite3.Connection) -> int:
+    """The store's schema version; StoreTooNew if it is past the last migration this code has."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version > len(MIGRATIONS):
+        raise StoreTooNew(version, len(MIGRATIONS))
+    return version
 
 
 @contextmanager

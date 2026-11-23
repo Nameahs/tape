@@ -917,6 +917,25 @@ def test_read_commands_work_after_init(index, tmp_path, monkeypatch, capsys):
     assert "no Tape store" not in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("argv", [["init"], ["run"], ["stats"]])
+def test_a_store_from_a_newer_tape_is_refused_with_one_line(tmp_path, monkeypatch, capsys, argv):
+    path = tmp_path / "t.db"
+    with closing(db.connect(path)) as conn:
+        conn.execute(f"PRAGMA user_version = {len(db.MIGRATIONS) + 1}")
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+
+    with respx.mock(assert_all_called=False) as router:
+        assert main(argv) == 2
+    assert not router.calls
+
+    captured = capsys.readouterr()
+    assert captured.err == (
+        f"error: the Tape store at {path} has schema version {len(db.MIGRATIONS) + 1}, newer than this Tape "
+        f"knows ({len(db.MIGRATIONS)}); upgrade Tape to use it\n"
+    )
+    assert captured.out == ""
+
+
 def test_init_creates_the_store_and_its_folder(tmp_path, monkeypatch, capsys):
     path = tmp_path / "data" / "t.db"
     monkeypatch.setenv("TAPE_DB_PATH", str(path))
