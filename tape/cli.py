@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -354,6 +355,19 @@ def _positive_int(value: str) -> int:
     return n
 
 
+_ACCESSION = re.compile(r"(\d{10})-?(\d{2})-?(\d{6})")
+
+
+def _accession(value: str) -> str:
+    """An accession number in the dashed form the store uses. EDGAR's folder URLs drop the dashes, and a
+    pasted argument often brings a trailing newline; left as typed, either reads as an unknown filing.
+    """
+    m = _ACCESSION.fullmatch(value.strip())
+    if m is None:
+        raise argparse.ArgumentTypeError(f"expected an accession number like 0000320193-26-000101, got {value!r}")
+    return "-".join(m.groups())
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tape", description="SEC 8-K watcher scored by Jev")
     p.add_argument("-v", "--verbose", action="store_true")
@@ -379,7 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="skip filings EDGAR accepted longer ago than this (default 24)")
     pe.set_defaults(fn=cmd_pending)
     br = sub.add_parser("brief", help="save a brief written by the agent")
-    br.add_argument("accession_no")
+    br.add_argument("accession_no", type=_accession)
     br.add_argument("--text", help="brief text; read from stdin if omitted")
     br.add_argument("--replace", action="store_true",
                     help="correct a brief already saved; keeps the time the first one was sent")
@@ -393,7 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
                      help="also send via Telegram Bot API, and mark the filings reported if it goes out")
     out.add_argument("--json", action="store_true",
                      help="print the digest's filings as JSON, in digest order, instead of the text")
-    d.add_argument("--mark", nargs="*", metavar="ACC",
+    d.add_argument("--mark", nargs="*", metavar="ACC", type=_accession,
                    help="with accession numbers: print nothing and mark just those filings reported, once "
                         "the agent has sent them; bare: mark the printed filings reported")
     d.set_defaults(fn=cmd_digest)
@@ -403,7 +417,7 @@ def build_parser() -> argparse.ArgumentParser:
     rt = sub.add_parser("retry", help="list filings Tape gave up on, or clear them to be retried")
     rt.add_argument("--score", action="store_true", help="clear filings scoring gave up on")
     rt.add_argument("--fetch", action="store_true", help="clear filings fetching gave up on")
-    rt.add_argument("--accession", help="only this accession number")
+    rt.add_argument("--accession", type=_accession, help="only this accession number")
     rt.set_defaults(fn=cmd_retry)
     e = sub.add_parser("evaluate", help="pull prices, compute abnormal returns, compare to baselines")
     e.add_argument("--skip-prices", action="store_true", help="use outcomes already stored")

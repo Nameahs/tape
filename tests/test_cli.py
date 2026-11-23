@@ -1283,3 +1283,46 @@ def test_digest_mark_with_accessions_refuses_send_and_json(tmp_path, monkeypatch
     assert main(["digest", flag, "--mark", acc]) == 2
     assert "can't be combined" in capsys.readouterr().err
     assert _digested(path)[acc] is None
+
+
+ACC = "0000000001-26-000001"
+
+
+@pytest.mark.parametrize("typed", [ACC, "000000000126000001", f" {ACC}\n", "000000000126000001\n"])
+def test_accession_arguments_accept_the_undashed_form_and_stray_whitespace(typed, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    stuck, _ = _given_up_store(path)
+    assert stuck == ACC
+    assert main(["retry", "--accession", typed]) == 0
+    assert capsys.readouterr().out.split()[:2] == ["score", ACC]
+    assert main(["retry", "--score", "--accession", typed]) == 0
+    assert _counts(path) == (0, 1)
+
+
+def test_brief_and_digest_mark_accept_the_undashed_form(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    acc = _seed(path)
+    undashed = acc.replace("-", "")
+    assert main(["brief", undashed, "--text", "Deal announced."]) == 0
+    assert capsys.readouterr().out.strip() == f"saved brief for {acc}"
+    assert main(["digest", "--mark", f"{undashed}\n"]) == 0
+    assert capsys.readouterr().err == ""
+    assert _digested(path)[acc] is not None
+
+
+@pytest.mark.parametrize("argv", [
+    ["brief", "0000000001-26-00001", "--text", "x"],
+    ["digest", "--mark", "acc-1"],
+    ["retry", "--accession", "0000000001_26_000001"],
+    ["retry", "--accession", ""],
+])
+def test_malformed_accession_numbers_are_usage_errors(argv, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+    assert "expected an accession number like 0000320193-26-000101" in capsys.readouterr().err
+    assert not path.exists()
