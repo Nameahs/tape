@@ -47,6 +47,9 @@ _CELLS = ("td", "th")
 _LEADS = frozenset("$€£¥(")
 _TRAILS = frozenset(")%")
 _CELL_SEP = " | "
+# How far back from the budget a cut may move to end on a whole word. Further than this and the text
+# is one long run (a URL, a table rule), where a hard cut loses less than giving the room away.
+_CLIP_REACH = 40
 
 
 def html_to_text(html: str) -> str:
@@ -185,7 +188,25 @@ def build_state_text(main_html: str, exhibit_html: str | None, max_chars: int,
     exhibit = parts[1] if len(parts) > 1 else ""
     exhibit_room = len(exhibit) + 2 if exhibit else 0
     main_budget = min(len(main), max((max_chars * 2) // 3, max_chars - exhibit_room))
-    head = main[:main_budget]
+    head = _clip(main, main_budget)
     rest = max_chars - len(head) - 2
-    tail = exhibit[:rest] if exhibit and rest > 0 else ""
+    tail = _clip(exhibit, rest) if exhibit and rest > 0 else ""
     return (head + "\n\n" + tail).strip()[:max_chars]
+
+
+def _clip(text: str, limit: int) -> str:
+    """`text` cut to at most `limit` characters, ending on a whole word where one ends close enough.
+
+    A slice ends wherever the budget runs out, often inside a figure: "$1,284,6" reads to Jev as a
+    smaller number, not as missing text.
+    """
+    if len(text) <= limit:
+        return text
+    if limit <= 0:
+        return ""
+    if text[limit].isspace():  # the cut already falls between words
+        return text[:limit].rstrip()
+    cut = max(text.rfind(" ", 0, limit), text.rfind("\n", 0, limit))
+    if cut > 0 and limit - cut <= _CLIP_REACH:
+        return text[:cut].rstrip()
+    return text[:limit]
