@@ -176,20 +176,19 @@ def build_state_text(main_html: str, exhibit_html: str | None, max_chars: int,
     says how much). `exhibit_type` is the exhibit's document type from the index; None means EX-99.1.
     """
     main = drop_boilerplate(html_to_text(main_html))
-    parts = [main]
     exhibit = drop_boilerplate(html_to_text(exhibit_html)) if exhibit_html else ""
     if exhibit:  # a label with nothing under it would make an empty filing look non-empty
-        parts.append(exhibit_label(exhibit_type) + "\n" + exhibit)
-    text = "\n\n".join(parts)
+        exhibit = exhibit_label(exhibit_type) + "\n" + exhibit
+    # An empty body is left out rather than joined, or an exhibit-only filing would open with a blank line.
+    text = "\n\n".join(p for p in (main, exhibit) if p)
     if len(text) <= max_chars:
         return text
     # The 8-K body gets at least two thirds of the budget, plus whatever a short (or missing)
     # exhibit leaves unused; the exhibit fills the rest.
-    exhibit = parts[1] if len(parts) > 1 else ""
     exhibit_room = len(exhibit) + 2 if exhibit else 0
     main_budget = min(len(main), max((max_chars * 2) // 3, max_chars - exhibit_room))
     head = _clip(main, main_budget)
-    rest = max_chars - len(head) - 2
+    rest = max_chars - len(head) - (2 if head else 0)  # no separator when there is no body before it
     tail = _clip(exhibit, rest) if exhibit and rest > 0 else ""
     return (head + "\n\n" + tail).strip()[:max_chars]
 

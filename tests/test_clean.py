@@ -325,3 +325,15 @@ def test_state_text_hard_cuts_a_long_unbroken_run():
     main = _page("Item 8.01 " + "x" * 2000)
     text = build_state_text(main, None, max_chars=600)
     assert len(text) == 600
+
+
+def test_exhibit_only_filing_starts_at_the_exhibit_label():
+    ex = _page("Acme reports record revenue.")
+    assert build_state_text("", ex, 1000) == "EXHIBIT 99.1 (press release)\nAcme reports record revenue."
+
+
+def test_exhibit_only_filing_over_budget_uses_the_whole_budget():
+    ex = _page("Acme reports record revenue. " * 100)
+    text = build_state_text("", ex, 300)
+    assert text.startswith("EXHIBIT 99.1 (press release)\n")
+    assert 290 <= len(text) <= 300
