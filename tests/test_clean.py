@@ -301,3 +301,27 @@ def test_html_to_text_does_not_scan_siblings_per_block(monkeypatch):
 def test_html_to_text_handles_deep_nesting():
     html = "<div>" * 5000 + "<p>Deep.</p>" + "</div>" * 5000
     assert html_to_text(html) == "Deep."
+
+
+def test_state_text_cut_ends_on_a_whole_figure():
+    main = _page("Item 2.02 " + "filler " * 80 + "Net revenue was $1,284,615 thousand for the quarter.")
+    for budget in range(560, 610):
+        text = build_state_text(main, None, max_chars=budget)
+        assert len(text) <= budget
+        assert "$1,284,615" in text or "$1," not in text, budget
+        assert text.split()[-1] in {"filler", "Net", "revenue", "was", "$1,284,615", "thousand", "for", "the"}
+
+
+def test_state_text_cuts_exhibit_on_a_whole_word():
+    main = _page("Item 8.01 Other Events.")
+    ex = _page("The Board approved a repurchase of up to 250 million shares. " * 20)
+    for budget in range(200, 260):
+        text = build_state_text(main, ex, max_chars=budget)
+        assert len(text) <= budget
+        assert text.split()[-1] in set("The Board approved a repurchase of up to 250 million shares.".split())
+
+
+def test_state_text_hard_cuts_a_long_unbroken_run():
+    main = _page("Item 8.01 " + "x" * 2000)
+    text = build_state_text(main, None, max_chars=600)
+    assert len(text) == 600
