@@ -89,6 +89,11 @@ or a backfill sees the filing again, so for an older one follow with `tape backf
 2 and `error: no Tape store at ...` instead, so a wrong `TAPE_DB_PATH` or working directory can't pass
 for a quiet day. If you see that line, fix the variable; `tape init` is only for a genuinely new store.
 
+Every command, `tape run` included, also exits with status 2 and `error: the Tape store at ... has schema
+version N, newer than this Tape knows` if a newer Tape has already migrated the store. That usually means
+a deploy was rolled back after the new version ran: the store can't be migrated backwards, so deploy the
+newer Tape again (or restore the store from before it ran).
+
 ## 5. Backfill (once)
 
 ```bash
