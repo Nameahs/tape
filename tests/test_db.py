@@ -340,6 +340,43 @@ def test_migrates_a_version_zero_database_in_place(tmp_path):
     assert db.connect(path).execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
+def _store_at_version(path, version):
+    with closing(db.connect(path)) as conn:
+        conn.execute(f"PRAGMA user_version = {version}")
+
+
+def test_connect_refuses_a_store_migrated_by_a_newer_tape(tmp_path):
+    path = tmp_path / "newer.db"
+    _store_at_version(path, len(db.MIGRATIONS) + 1)
+    with closing(sqlite3.connect(path)) as newer:
+        newer.execute("DROP TABLE outcomes")  # something the newer schema did that SCHEMA would undo
+
+    with pytest.raises(db.StoreTooNew) as e:
+        db.connect(path, create=False)
+    assert (e.value.version, e.value.known) == (len(db.MIGRATIONS) + 1, len(db.MIGRATIONS))
+    assert f"version {len(db.MIGRATIONS) + 1}" in str(e.value)
+    with closing(sqlite3.connect(path)) as after:
+        assert after.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS) + 1
+        tables = {r[0] for r in after.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "outcomes" not in tables
+
+
+def test_migrate_refuses_a_newer_schema(tmp_path):
+    path = tmp_path / "newer.db"
+    _store_at_version(path, len(db.MIGRATIONS))
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute(f"PRAGMA user_version = {len(db.MIGRATIONS) + 3}")
+        with pytest.raises(db.StoreTooNew):
+            db.migrate(conn)
+
+
+def test_a_store_at_the_current_version_opens(tmp_path):
+    path = tmp_path / "current.db"
+    _store_at_version(path, len(db.MIGRATIONS))
+    with closing(db.connect(path, create=False)) as conn:
+        assert db.migrate(conn) == len(db.MIGRATIONS)
+
+
 def test_accepted_at_range_queries_seek_on_the_julianday_index(conn):
     # Every date-range query compares julianday(accepted_at); without an index on that expression
     # SQLite scans the whole filings table, text and all.
