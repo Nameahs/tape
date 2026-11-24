@@ -155,15 +155,30 @@ def _token_count(usage: Any) -> int | None:
 
 
 class InvalidAnswerError(ValueError):
-    """Jev answered a question with a value outside its scale or choices.
+    """Jev left a question unanswered, or answered it with a value outside its scale or choices.
 
     The SDK checks types, not ranges, so a materiality of 9 or an event label we never offered would
     otherwise be stored and routed like any other score. It isn't an outage: the filing counts an attempt.
     """
 
 
+def _answer(answers: Any, name: str, attr: str) -> Any:
+    """The answer to one question, or InvalidAnswerError naming it if Jev left it out or answered with null.
+
+    Without this a partial response fails the filing with a bare KeyError or a float(None) TypeError, which
+    is what `tape retry` would show and reads like a bug in Tape rather than an incomplete answer.
+    """
+    answer = answers.get(name) if answers is not None else None
+    if answer is None or getattr(answer, attr, None) is None:
+        raise InvalidAnswerError(f"Jev gave no answer for {name}")
+    return answer
+
+
 def _in_range(name: str, value: Any, low: float, high: float) -> float:
-    number = float(value)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise InvalidAnswerError(f"Jev's {name} answer {value!r} is not a number") from None
     if not low <= number <= high:  # also false for NaN
         raise InvalidAnswerError(f"Jev's {name} answer {number!r} is outside {low:g}..{high:g}")
     return number
@@ -179,7 +194,16 @@ def score_one(client: SystemOneClient, row: Any, model: str, price_per_m: float)
     started = time.perf_counter()
     resp = client.system_one(state_for(row), QUESTIONS, model=model)
     latency_ms = (time.perf_counter() - started) * 1000
-    a = resp.answers
+    a = {
+        name: _answer(resp.answers, name, attr)
+        for name, attr in (
+            ("materiality", "score"),
+            ("event", "choice"),
+            ("direction", "choice"),
+            ("surprise", "noul"),
+            ("boilerplate", "noul"),
+        )
+    }
     input_tokens = _token_count(resp.usage)
     # Jev's expected score runs 0..4 for five levels; store it as 1..5.
     materiality = _in_range("materiality", a["materiality"].score, 0.0, len(MATERIALITY_LEVELS) - 1.0)
