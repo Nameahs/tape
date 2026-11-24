@@ -164,6 +164,35 @@ def test_fetch_labels_the_exhibit_it_used():
     assert "press release" not in text
 
 
+def _index_without_items(items_block: str = ""):
+    """The fixture index page with its Items block replaced by `items_block`."""
+    html = (FIX / "index.htm").read_text()
+    start = html.index('<div class="infoHead">Items</div>')
+    end = html.index("</div>", html.index('<div class="info">', start)) + len("</div>")
+    return html[:start] + items_block + html[end:]
+
+
+@respx.mock
+@pytest.mark.parametrize("items_block", ["", '<div class="infoHead">Items</div><div class="info"></div>'])
+def test_fetch_reads_items_from_the_body_when_the_index_lists_none(items_block):
+    _mock_filing(respx)
+    respx.get(INDEX).respond(200, text=_index_without_items(items_block))
+    ref = FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX)
+    filing = Edgar("ua", per_second=1000).fetch(ref, max_chars=5000)
+    assert filing.items == ("5.02", "9.01")
+
+
+@respx.mock
+def test_fetch_ignores_items_the_exhibit_mentions():
+    _mock_filing(respx)
+    respx.get(INDEX).respond(200, text=_index_without_items())
+    respx.get(f"{FOLDER}/exmp-20261013.htm").respond(200, text="<html><body><p>Board update.</p></body></html>")
+    exhibit = "<html><body><p>Item 2.02 Results of Operations</p></body></html>"
+    respx.get(f"{FOLDER}/ex991.htm").respond(200, text=exhibit)
+    ref = FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX)
+    assert Edgar("ua", per_second=1000).fetch(ref, max_chars=5000).items == ()
+
+
 def _index_without_documents():
     """The fixture index page with its document table emptied."""
     html = (FIX / "index.htm").read_text()
