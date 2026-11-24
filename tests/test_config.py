@@ -194,7 +194,16 @@ def test_jev_price_may_be_zero(monkeypatch):
     assert Settings.from_env().jev_input_price_per_m == 0.0
 
 
-@pytest.mark.parametrize("ua", ["Tape you@example.com", "  Acme Research ops@acme.co  ", "a@b.io"])
+@pytest.mark.parametrize(
+    "ua",
+    [
+        "Tape you@example.com",
+        "  Acme Research ops@acme.co  ",
+        "a@b.io",
+        "Tape <you@example.com>",
+        "Tape you@example.com (ops)",
+    ],
+)
 def test_require_contact_accepts_a_name_and_email(ua):
     from tape.config import require_contact
 
@@ -203,7 +212,8 @@ def test_require_contact_accepts_a_name_and_email(ua):
 
 @pytest.mark.parametrize(
     "ua",
-    [Settings().user_agent, "", "   ", "Tape research bot", "@example.com", "Tape you@localhost", "Tape you@"],
+    [Settings().user_agent, "", "   ", "Tape research bot", "@example.com", "Tape you@localhost", "Tape you@",
+     "Tape @example.com", "Tape <@example.com>", "Tape you@.com", "Tape you@example."],
 )
 def test_require_contact_rejects_a_missing_contact(ua):
     from tape.config import require_contact

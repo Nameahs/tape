@@ -192,11 +192,16 @@ def require_contact(user_agent: str) -> str:
 
     The SEC's fair-access policy wants automated clients to send a name and an email. EDGAR answers
     anything else with 403 "Undeclared Automated Tool", which otherwise surfaces as a generic HTTP
-    error on every request and looks like an outage. Checking for an "@" is enough to catch the
-    unset placeholder and obvious typos without trying to validate email syntax.
+    error on every request and looks like an outage. Requiring one token shaped like
+    local@host.tld is enough to catch the unset placeholder and obvious typos without trying to
+    validate email syntax.
     """
-    name, _, domain = user_agent.strip().rpartition("@")
-    if not name.strip() or "." not in domain or " " in domain:
+    # Judge the address itself, not the whole string: with a plain rpartition the name before the
+    # address satisfied the "something before the @" check, so "Tape @example.com" got through.
+    address = next((token.strip("<>()[],;") for token in reversed(user_agent.split()) if "@" in token), "")
+    local, _, domain = address.rpartition("@")
+    host, _, tld = domain.rpartition(".")
+    if not local or not host or not tld:
         raise ConfigError(
             f"TAPE_USER_AGENT must include a contact email for the SEC, e.g. "
             f"'Tape you@example.com'; got {user_agent!r}"
