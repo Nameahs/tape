@@ -159,6 +159,41 @@ def test_score_one_rejects_answers_outside_the_question(conn, question, attr, va
         score_one(Answering(question, attr, value), _row(conn), "m", 0.042)
 
 
+class Omitting(FakeJev):
+    """FakeJev whose response leaves one question out entirely."""
+
+    def __init__(self, question):
+        super().__init__()
+        self.question = question
+
+    def system_one(self, state, questions, *, model=None):
+        resp = super().system_one(state, questions, model=model)
+        del resp.answers[self.question]
+        return resp
+
+
+@pytest.mark.parametrize("question", sorted(QUESTIONS))
+def test_score_one_names_a_question_jev_left_out(conn, question):
+    with pytest.raises(InvalidAnswerError, match=f"no answer for {question}$"):
+        score_one(Omitting(question), _row(conn), "m", 0.042)
+
+
+@pytest.mark.parametrize("question, attr", [
+    ("materiality", "score"),
+    ("direction", "choice"),
+    ("surprise", "noul"),
+    ("boilerplate", "noul"),
+])
+def test_score_one_names_a_question_jev_answered_with_null(conn, question, attr):
+    with pytest.raises(InvalidAnswerError, match=f"no answer for {question}$"):
+        score_one(Answering(question, attr, None), _row(conn), "m", 0.042)
+
+
+def test_score_one_rejects_a_non_numeric_answer(conn):
+    with pytest.raises(InvalidAnswerError, match="surprise answer 'high' is not a number"):
+        score_one(Answering("surprise", "noul", "high"), _row(conn), "m", 0.042)
+
+
 @pytest.mark.parametrize("question, attr, value, field, stored", [
     ("materiality", "score", 0.0, "materiality", 1.0),
     ("materiality", "score", 4.0, "materiality", 5.0),
