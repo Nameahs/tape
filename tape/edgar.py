@@ -22,7 +22,7 @@ import feedparser
 import httpx
 from bs4 import BeautifulSoup
 
-from tape.clean import build_state_text
+from tape.clean import build_state_text, html_to_text, items_in
 from tape.db import Filing
 from tape.files import write_atomic
 
@@ -272,10 +272,23 @@ class Edgar:
             form=ref.form,
             accepted_at=index.accepted_at,
             url=ref.index_url,
-            items=tuple(index.items),
+            items=tuple(index.items or _body_items(main_html)),
             ticker=self.ticker_for(ref.cik),
             clean_text=text,
         )
+
+
+def _body_items(main_html: str) -> list[str]:
+    """The items an 8-K body announces in its own headings ("Item 5.02 Departure of ...").
+
+    The fallback for an index page with no Items block: without it the filing is stored with no items, so
+    Jev loses that hint and the evaluator's item-code rule can never flag it. Only the body is read, not
+    the exhibit, where a press release can mention an item in passing.
+    """
+    items = items_in(html_to_text(main_html)) if main_html else []
+    if items:
+        log.info("index page lists no items; took %s from the 8-K body", ", ".join(items))
+    return items
 
 
 # Charsets browsers read as Windows-1252, which agrees with them on every printable character and also
