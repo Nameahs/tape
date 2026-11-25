@@ -133,10 +133,11 @@ class Thresholds:
         """Describe each routing rule these cutoffs leave dead, globally and per event.
 
         route() checks brief_now first, so a digest bar at or above it empties the digest band, and a
-        surprise bar at or above it means the surprise rule never decides anything. Both are legal (a
-        digest bar at brief-now is how you turn the digest off), but done by accident they look like
-        a run of quiet days, so the caller warns rather than refuses. An event is only reported when
-        its own overrides cause the problem; one the global cutoffs already cause is reported once.
+        surprise bar at or above it means the surprise rule never decides anything, as does a surprise
+        cutoff of 1, since route() needs a surprise strictly above it. All are legal (a digest bar at
+        brief-now is how you turn the digest off), but done by accident they look like a run of quiet days,
+        so the caller warns rather than refuses. An event is only reported when its own overrides cause
+        the problem; one the global cutoffs already cause is reported once.
         """
         problems = _unreachable(self, "", set())
         for event, values in sorted(self.overrides.items()):
@@ -159,6 +160,11 @@ def _unreachable(t: Thresholds, event: str, overridden: set[str]) -> list[str]:
         if value >= t.brief_now:
             out.append(f"{var(cutoff)} ({value:g}) is at or above {var('brief_now')} ({t.brief_now:g}): "
                        f"{lost}{where}")
+    # route() needs surprise strictly above the cutoff, and surprise is a probability, so a cutoff of 1
+    # (the top of its accepted range) can never be beaten.
+    if (not event or "surprise" in overridden) and t.surprise >= 1.0:
+        out.append(f"{var('surprise')} ({t.surprise:g}) is at or above 1, the highest surprise Jev returns: "
+                   f"the surprise rule can never brief a filing{where}")
     return out
 
 
