@@ -28,6 +28,69 @@ def test_failed_write_keeps_previous_file(tmp_path, monkeypatch):
     assert os.listdir(tmp_path) == ["b.txt"]
 
 
+def test_write_atomic_syncs_the_data_before_the_rename(tmp_path, monkeypatch):
+    path = tmp_path / "b.txt"
+    calls = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(fd):
+        calls.append(("fsync", os.fstat(fd).st_size))
+        real_fsync(fd)
+
+    def replace(src, dst):
+        calls.append(("replace", None))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    write_atomic(path, "hello")
+    assert calls[:2] == [("fsync", 5), ("replace", None)]
+    assert path.read_text() == "hello"
+
+
+def test_write_atomic_syncs_the_folder_after_the_rename(tmp_path, monkeypatch):
+    path = tmp_path / "b.txt"
+    synced = []
+    real_fsync = os.fsync
+
+    def fsync(fd):
+        synced.append(os.path.samestat(os.fstat(fd), os.stat(tmp_path)))
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    write_atomic(path, "hello")
+    assert synced == [False, True]
+
+
+def test_folder_that_cannot_be_synced_does_not_fail_the_write(tmp_path, monkeypatch):
+    path = tmp_path / "b.txt"
+    real_fsync = os.fsync
+
+    def fsync(fd):
+        if os.path.samestat(os.fstat(fd), os.stat(tmp_path)):
+            raise OSError("Invalid argument")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    write_atomic(path, "hello")
+    assert path.read_text() == "hello"
+    assert os.listdir(tmp_path) == ["b.txt"]
+
+
+def test_failed_fsync_keeps_previous_file(tmp_path, monkeypatch):
+    path = tmp_path / "b.txt"
+    path.write_text("old")
+
+    def fail(fd):
+        raise OSError("I/O error")
+
+    monkeypatch.setattr(os, "fsync", fail)
+    with pytest.raises(OSError, match="I/O error"):
+        write_atomic(path, "new")
+    assert path.read_text() == "old"
+    assert os.listdir(tmp_path) == ["b.txt"]
+
+
 def run_in_ascii_locale(code: str, *args: str) -> subprocess.CompletedProcess:
     """Run `code` in a fresh interpreter whose locale encoding is ASCII, the way a bare scheduled job can be."""
     env = {**os.environ, "LC_ALL": "C", "LANG": "C", "PYTHONUTF8": "0", "PYTHONCOERCECLOCALE": "0"}
