@@ -261,3 +261,31 @@ def test_global_problem_is_not_repeated_for_unrelated_event_overrides():
     t = Thresholds(digest=4.0, overrides={"mna": {"boilerplate": 0.5}, "earnings_guidance": {"digest": 3.0}})
     assert t.unreachable() == [
         "TAPE_DIGEST (4) is at or above TAPE_BRIEF_NOW (4): no filing will be routed to the digest"]
+
+
+def test_surprise_cutoff_of_one_warns(monkeypatch, caplog):
+    monkeypatch.setenv("TAPE_SURPRISE", "1")
+    with caplog.at_level("WARNING", logger="tape.config"):
+        t = Thresholds.from_env()
+    assert t.surprise == 1.0  # a warning, not an error
+    assert [r.getMessage() for r in caplog.records] == [
+        "TAPE_SURPRISE (1) is at or above 1, the highest surprise Jev returns: "
+        "the surprise rule can never brief a filing"]
+
+
+def test_surprise_cutoff_just_below_one_is_reachable():
+    assert Thresholds(surprise=0.99).unreachable() == []
+
+
+def test_event_surprise_override_of_one_names_the_event_variable():
+    t = Thresholds(overrides={"mna": {"surprise": 1.0}, "earnings_guidance": {"digest": 2.0}})
+    assert t.unreachable() == [
+        "TAPE_SURPRISE__MNA (1) is at or above 1, the highest surprise Jev returns: "
+        "the surprise rule can never brief a filing for mna"]
+
+
+def test_global_surprise_cutoff_of_one_is_not_repeated_per_event():
+    t = Thresholds(surprise=1.0, overrides={"mna": {"brief_now": 4.5}})
+    assert t.unreachable() == [
+        "TAPE_SURPRISE (1) is at or above 1, the highest surprise Jev returns: "
+        "the surprise rule can never brief a filing"]
