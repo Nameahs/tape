@@ -48,6 +48,35 @@ def test_write_atomic_syncs_the_data_before_the_rename(tmp_path, monkeypatch):
     assert path.read_text() == "hello"
 
 
+def test_write_atomic_syncs_the_folder_after_the_rename(tmp_path, monkeypatch):
+    path = tmp_path / "b.txt"
+    synced = []
+    real_fsync = os.fsync
+
+    def fsync(fd):
+        synced.append(os.path.samestat(os.fstat(fd), os.stat(tmp_path)))
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    write_atomic(path, "hello")
+    assert synced == [False, True]
+
+
+def test_folder_that_cannot_be_synced_does_not_fail_the_write(tmp_path, monkeypatch):
+    path = tmp_path / "b.txt"
+    real_fsync = os.fsync
+
+    def fsync(fd):
+        if os.path.samestat(os.fstat(fd), os.stat(tmp_path)):
+            raise OSError("Invalid argument")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    write_atomic(path, "hello")
+    assert path.read_text() == "hello"
+    assert os.listdir(tmp_path) == ["b.txt"]
+
+
 def test_failed_fsync_keeps_previous_file(tmp_path, monkeypatch):
     path = tmp_path / "b.txt"
     path.write_text("old")
