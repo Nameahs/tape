@@ -344,7 +344,13 @@ def cmd_dashboard(args, settings, conn) -> int:
     return 0
 
 
-def _positive_int(value: str) -> int:
+# The longest window any command accepts. Every window becomes a timedelta subtracted from now, and one
+# reaching before year 1 raised OverflowError with a traceback; a century is far beyond any real use.
+MAX_WINDOW_DAYS = 36_525
+MAX_WINDOW_HOURS = MAX_WINDOW_DAYS * 24
+
+
+def _positive_int(value: str, maximum: int | None = None) -> int:
     try:
         n = int(value)
     except ValueError:
@@ -352,7 +358,17 @@ def _positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError(f"expected a whole number, got {value!r}") from None
     if n < 1:
         raise argparse.ArgumentTypeError("must be at least 1")
+    if maximum is not None and n > maximum:
+        raise argparse.ArgumentTypeError(f"must be at most {maximum}, got {n}")
     return n
+
+
+def _days(value: str) -> int:
+    return _positive_int(value, MAX_WINDOW_DAYS)
+
+
+def _hours(value: str) -> int:
+    return _positive_int(value, MAX_WINDOW_HOURS)
 
 
 _ACCESSION = re.compile(r"(\d{10})-?(\d{2})-?(\d{6})")
@@ -381,7 +397,7 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("run", help="one pass: ingest, score, route")
     r.set_defaults(fn=cmd_run, busy_exit=0, creates_store=True)
     b = sub.add_parser("backfill", help="ingest and score past business days")
-    b.add_argument("--days", type=_positive_int, default=90)
+    b.add_argument("--days", type=_days, default=90)
     b.set_defaults(fn=cmd_backfill, busy_exit=1, creates_store=True)
     rr = sub.add_parser("reroute", help="re-apply thresholds to stored scores")
     rr.add_argument("--dry-run", action="store_true",
@@ -389,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
     # Reroute rewrites routes a running pass is also writing; --dry-run writes nothing, so it skips the lock.
     rr.set_defaults(fn=cmd_reroute, busy_exit=1, busy_note="nothing rerouted; try again when it finishes")
     pe = sub.add_parser("pending", help="recent filings waiting for a brief (JSON)")
-    pe.add_argument("--max-age-hours", type=_positive_int, default=24,
+    pe.add_argument("--max-age-hours", type=_hours, default=24,
                     help="skip filings EDGAR accepted longer ago than this (default 24)")
     pe.set_defaults(fn=cmd_pending)
     br = sub.add_parser("brief", help="save a brief written by the agent")
@@ -399,7 +415,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="correct a brief already saved; keeps the time the first one was sent")
     br.set_defaults(fn=cmd_brief)
     d = sub.add_parser("digest", help="print the digest of recent material filings")
-    d.add_argument("--hours", type=_positive_int, default=DIGEST_LOOKBACK_HOURS,
+    d.add_argument("--hours", type=_hours, default=DIGEST_LOOKBACK_HOURS,
                    help="only filings accepted in the last N hours (default %(default)s, so filings routed "
                         "late on a Friday or before a holiday still make the next digest)")
     out = d.add_mutually_exclusive_group()
@@ -412,7 +428,7 @@ def build_parser() -> argparse.ArgumentParser:
                         "the agent has sent them; bare: mark the printed filings reported")
     d.set_defaults(fn=cmd_digest)
     st = sub.add_parser("stats", help="filings, scores, routes and Jev spend per day")
-    st.add_argument("--days", type=_positive_int, default=7)
+    st.add_argument("--days", type=_days, default=7)
     st.set_defaults(fn=cmd_stats)
     rt = sub.add_parser("retry", help="list filings Tape gave up on, or clear them to be retried")
     rt.add_argument("--score", action="store_true", help="clear filings scoring gave up on")
@@ -422,7 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("evaluate", help="pull prices, compute abnormal returns, compare to baselines")
     e.add_argument("--skip-prices", action="store_true", help="use outcomes already stored")
     # Default lives in tape.evaluate; importing it here would load pandas for every command.
-    e.add_argument("--days", type=_positive_int, default=None,
+    e.add_argument("--days", type=_days, default=None,
                    help="price filings accepted in the last N days (default 30; "
                         "raise it once after a backfill)")
     e.add_argument("--out", default="out/eval.json")

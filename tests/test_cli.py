@@ -11,7 +11,15 @@ import pytest
 import respx
 
 from tape import db
-from tape.cli import DIGEST_LOOKBACK_HOURS, EXIT_TEMPFAIL, format_digest, format_reroute, main
+from tape.cli import (
+    DIGEST_LOOKBACK_HOURS,
+    EXIT_TEMPFAIL,
+    MAX_WINDOW_DAYS,
+    MAX_WINDOW_HOURS,
+    format_digest,
+    format_reroute,
+    main,
+)
 from tape.edgar import FEED_URL, EdgarBlockedError
 from tape.evaluate import PRICE_LOOKBACK_DAYS
 from tape.notify import API
@@ -233,6 +241,42 @@ def test_rejects_non_positive_windows_before_touching_store(argv, tmp_path, monk
     assert exc.value.code == 2
     assert "must be at least 1" in capsys.readouterr().err
     assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["backfill", "--days", "1000000"],
+        ["stats", "--days", "1000000"],
+        ["evaluate", "--days", "36526"],
+        ["digest", "--hours", "100000000"],
+        ["pending", "--max-age-hours", "876601"],
+    ],
+)
+def test_rejects_windows_too_long_to_compute_before_touching_store(argv, tmp_path, monkeypatch, capsys):
+    path = tmp_path / "t.db"
+    monkeypatch.setenv("TAPE_DB_PATH", str(path))
+    with pytest.raises(SystemExit) as exc:
+        main(argv)
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert f"must be at most {MAX_WINDOW_DAYS if '--days' in argv else MAX_WINDOW_HOURS}" in err
+    assert "Traceback" not in err
+    assert not path.exists()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["stats", "--days", str(MAX_WINDOW_DAYS)],
+        ["digest", "--hours", str(MAX_WINDOW_HOURS)],
+        ["pending", "--max-age-hours", str(MAX_WINDOW_HOURS)],
+    ],
+)
+def test_longest_window_still_runs(argv, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("TAPE_DB_PATH", str(tmp_path / "t.db"))
+    assert main(["init"]) == 0
+    assert main(argv) == 0
 
 
 def _config_env(tmp_path, monkeypatch):
