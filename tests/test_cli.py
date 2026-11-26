@@ -536,8 +536,8 @@ def test_brief_reads_stdin(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("  Example Corp raised guidance.\n"))
 
     assert main(["brief", acc]) == 0
-    conn = db.connect(path)
-    row = conn.execute("SELECT brief_text FROM briefs WHERE accession_no = ?", (acc,)).fetchone()
+    with closing(db.connect(path)) as conn:
+        row = conn.execute("SELECT brief_text FROM briefs WHERE accession_no = ?", (acc,)).fetchone()
     assert row["brief_text"] == "Example Corp raised guidance."
 
 

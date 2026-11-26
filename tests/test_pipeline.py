@@ -1,5 +1,6 @@
 import sqlite3
 import threading
+from contextlib import closing
 from datetime import UTC, date, datetime
 
 import httpx
@@ -852,11 +853,11 @@ def test_backfill_fetches_a_filing_given_up_on_during_an_old_outage(tmp_path):
     respx.get(IDX.format("20261013")).respond(200, text=(FIX / "form.idx").read_text())
     _mock_filing(respx)
 
-    conn = db.connect(path)
-    stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
+    with closing(db.connect(path)) as conn:
+        stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=1, end=date(2026, 10, 14))
 
-    assert (stats.fetched, stats.scored) == (1, 1)
-    assert db.fetch_given_up(conn) == []
+        assert (stats.fetched, stats.scored) == (1, 1)
+        assert db.fetch_given_up(conn) == []
 
 
 def test_a_retried_filing_is_scored_by_the_next_pass(conn):

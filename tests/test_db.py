@@ -337,7 +337,8 @@ def test_migrates_a_version_zero_database_in_place(tmp_path):
     assert (row["materiality"], row["materiality_confidence"]) == (2.0, None)
     assert db.migrate(conn) == len(db.MIGRATIONS)  # idempotent on reconnect
     conn.close()
-    assert db.connect(path).execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    with closing(db.connect(path)) as again:
+        assert again.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
 def _store_at_version(path, version):
@@ -400,9 +401,9 @@ def test_julianday_index_is_added_to_an_existing_database(tmp_path):
     old.commit()
     old.close()
 
-    conn = db.connect(path)
-    names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
-    assert "idx_filings_accepted_jd" in names
+    with closing(db.connect(path)) as conn:
+        names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        assert "idx_filings_accepted_jd" in names
 
 
 def test_scored_at_range_queries_seek_on_the_julianday_index(conn):
@@ -426,10 +427,10 @@ def test_scored_at_index_is_added_to_an_existing_database(tmp_path):
     old.commit()
     old.close()
 
-    conn = db.connect(path)
-    names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
-    assert "idx_scores_scored_jd" in names
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    with closing(db.connect(path)) as conn:
+        names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        assert "idx_scores_scored_jd" in names
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
 def test_score_confidence_round_trips(conn):
@@ -492,9 +493,9 @@ def test_outage_column_is_added_to_existing_runs(tmp_path):
     old.commit()
     old.close()
 
-    conn = db.connect(path)
-    assert [r["outage"] for r in conn.execute("SELECT outage FROM runs")] == [0]
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    with closing(db.connect(path)) as conn:
+        assert [r["outage"] for r in conn.execute("SELECT outage FROM runs")] == [0]
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
 def test_missing_days_column_is_added_to_existing_runs(tmp_path):
@@ -508,9 +509,9 @@ def test_missing_days_column_is_added_to_existing_runs(tmp_path):
     old.commit()
     old.close()
 
-    conn = db.connect(path)
-    assert [r["missing_days"] for r in conn.execute("SELECT missing_days FROM runs")] == [0]
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    with closing(db.connect(path)) as conn:
+        assert [r["missing_days"] for r in conn.execute("SELECT missing_days FROM runs")] == [0]
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
 def test_blocked_column_is_added_to_existing_runs(tmp_path):
@@ -524,9 +525,9 @@ def test_blocked_column_is_added_to_existing_runs(tmp_path):
     old.commit()
     old.close()
 
-    conn = db.connect(path)
-    assert [r["blocked"] for r in conn.execute("SELECT blocked FROM runs")] == [0]
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+    with closing(db.connect(path)) as conn:
+        assert [r["blocked"] for r in conn.execute("SELECT blocked FROM runs")] == [0]
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
 def test_run_kind_constraint(conn):
@@ -688,10 +689,10 @@ def test_outage_fetch_failures_are_forgotten_on_upgrade(tmp_path):
     path = tmp_path / "v10.db"
     _v10_store(path, [(f"a{i}", e) for i, e in enumerate(outage + about_the_filing)])
 
-    conn = db.connect(path)
+    with closing(db.connect(path)) as conn:
 
-    assert sorted(r["last_error"] for r in db.fetch_given_up(conn)) == sorted(about_the_filing)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
+        assert sorted(r["last_error"] for r in db.fetch_given_up(conn)) == sorted(about_the_filing)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
 
 
 def _give_up_scoring(conn, f):
