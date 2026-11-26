@@ -40,6 +40,21 @@ def test_build_with_report(conn):
     assert "90% CI" not in html  # reports written before the interval existed
 
 
+def test_build_lists_score_buckets_in_score_order(conn):
+    # Inserted out of order, as a hand-edited report might be.
+    report = {**REPORT, "by_score": {"5": _BUCKETS["5"], "1": _BUCKETS["1"], "3": _BUCKETS["3"]}}
+    html = build(conn, report, NOW)
+    rows = [html.index(f"<tr><td>{k}</td>") for k in ("1", "3", "5")]
+    assert rows == sorted(rows)
+
+
+def test_build_escapes_score_bucket_labels(conn):
+    # build() is public and takes the dict as given, without _read_report's checks.
+    report = {**REPORT, "by_score": {**REPORT["by_score"], "<i>x</i>": {"n": 1, "mean_abs_ar": 0.01}}}
+    html = build(conn, report, NOW)
+    assert "<i>x</i>" not in html
+
+
 def test_build_shows_gap_interval(conn):
     html = build(conn, {**REPORT, "gap_ci_low": 1.9, "gap_ci_high": 2.95}, NOW)
     assert "90% CI 1.90-2.95x, random 1.00x" in html
@@ -107,6 +122,10 @@ _BUCKETS = REPORT["by_score"]
     ({**REPORT, "by_score": {**_BUCKETS, "3": {"n": 2}}}, "score bucket '3'"),
     ({**REPORT, "by_score": {**_BUCKETS, "4": {"n": 2, "mean_abs_ar": None}}}, "score bucket '4'"),
     ({**REPORT, "by_score": {**_BUCKETS, "5": 0.06}}, "score bucket '5'"),
+    ({**REPORT, "by_score": {**_BUCKETS, "6": {"n": 2, "mean_abs_ar": 0.01}}}, "score bucket '6' is not one of"),
+    ({**REPORT, "by_score": {**_BUCKETS, "0": {"n": 2, "mean_abs_ar": 0.01}}}, "score bucket '0' is not one of"),
+    ({**REPORT, "by_score": {"3.0": {"n": 2, "mean_abs_ar": 0.01}}}, "score bucket '3.0' is not one of"),
+    ({**REPORT, "by_score": {"<b>4</b>": {"n": 2, "mean_abs_ar": 0.01}}}, "score bucket '<b>4</b>' is not one of"),
     ({**REPORT, "by_event": [1]}, "'by_event' not an object"),
     ({**REPORT, "by_event": {"mna": {"n": 9}}}, "event 'mna'"),
     ({**REPORT, "by_event": {"mna": {"n": 9, "mean_abs_ar": 0.02, "spearman": "0.3"}}}, "event 'mna'"),

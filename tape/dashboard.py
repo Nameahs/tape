@@ -17,6 +17,8 @@ from tape.fmt import fmt_metric
 log = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
 DAILY_DAYS = 14
+# The materiality buckets `tape evaluate` writes, in score order. The chart has a column for each.
+SCORE_BUCKETS = ("1", "2", "3", "4", "5")
 # Must keep the exact julianday(scored_at) expression so SQLite seeks on idx_scores_scored_jd.
 DAILY_SQL = "SELECT scored_at, cost_usd FROM scores WHERE julianday(scored_at) >= julianday(?)"
 # The 24h tiles count Jev calls by when they were made, so backfill spend shows up; same index rule as above.
@@ -66,7 +68,7 @@ def _tile(label: str, value: str, note: str = "") -> str:
 
 def _bar_chart(by_score: dict[str, dict[str, float]]) -> str:
     """Columns of mean |abnormal return| by score bucket, one series, labeled values."""
-    keys = [k for k in ("1", "2", "3", "4", "5") if k in by_score]
+    keys = [k for k in SCORE_BUCKETS if k in by_score]
     if not keys:
         return ""
     w, h, left, bottom, top = 640, 280, 48, 56, 24
@@ -81,7 +83,7 @@ def _bar_chart(by_score: dict[str, dict[str, float]]) -> str:
         parts.append(f'<line x1="{left}" x2="{w - 16}" y1="{y:.1f}" y2="{y:.1f}"/>'
                      f'<text x="{left - 8}" y="{y + 4:.1f}" text-anchor="end">{peak * frac:.1%}</text>')
     parts.append(f'<line x1="{left}" x2="{w - 16}" y1="{top + plot_h}" y2="{top + plot_h}"/>')
-    for i, k in enumerate(("1", "2", "3", "4", "5")):
+    for i, k in enumerate(SCORE_BUCKETS):
         cx = left + step * i + step / 2
         parts.append(f'<text x="{cx:.1f}" y="{top + plot_h + 18}" text-anchor="middle">{k}</text>')
         if k not in by_score:
@@ -255,9 +257,13 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
         tiles.append(_tile("Top 10% / bottom 50%", fmt_metric(report.get("gap_ratio"), ".2f", "x"), gap_note))
         tiles.append(_tile("Rank correlation", fmt_metric(report.get("spearman"), ".2f"),
                            f"random {fmt_metric(report.get('random_spearman'), '.2f')}"))
+        by_score = report["by_score"]
+        # Same buckets and order as the chart; build() can be handed a report that never went through
+        # _read_report, so the label is escaped like every other string from the report.
         rows = "".join(
-            f'<tr><td>{k}</td><td class="num">{v["n"]:,}</td><td class="num">{v["mean_abs_ar"]:.2%}</td></tr>'
-            for k, v in sorted(report["by_score"].items())
+            f'<tr><td>{escape(k)}</td><td class="num">{by_score[k]["n"]:,}</td>'
+            f'<td class="num">{by_score[k]["mean_abs_ar"]:.2%}</td></tr>'
+            for k in SCORE_BUCKETS if k in by_score
         )
         eval_html = (
             f'<p class="muted">{report["n"]:,} filings with next-day prices. '
@@ -334,6 +340,9 @@ def _report_problem(report: dict) -> str | None:
     if not isinstance(by_score, dict):
         return "'by_score' missing or not an object"
     for k, v in by_score.items():
+        # Anything else would be listed in the table but have no column in the chart.
+        if k not in SCORE_BUCKETS:
+            return f"score bucket {k!r} is not one of {', '.join(SCORE_BUCKETS)}"
         if not (isinstance(v, dict) and _is_number(v.get("n")) and _is_number(v.get("mean_abs_ar"))
                 and math.isfinite(v["mean_abs_ar"])):
             return f"score bucket {k!r} needs numeric 'n' and 'mean_abs_ar'"
