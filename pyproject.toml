@@ -49,3 +49,9 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A connection nobody closes is only reported when it is garbage collected, which pytest wraps
+# as an unraisable-exception warning; make both fail so a leak in tape or its tests is caught.
+filterwarnings = [
+    "error::ResourceWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
