@@ -257,9 +257,13 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
         tiles.append(_tile("Top 10% / bottom 50%", fmt_metric(report.get("gap_ratio"), ".2f", "x"), gap_note))
         tiles.append(_tile("Rank correlation", fmt_metric(report.get("spearman"), ".2f"),
                            f"random {fmt_metric(report.get('random_spearman'), '.2f')}"))
+        by_score = report["by_score"]
+        # Same buckets and order as the chart; build() can be handed a report that never went through
+        # _read_report, so the label is escaped like every other string from the report.
         rows = "".join(
-            f'<tr><td>{k}</td><td class="num">{v["n"]:,}</td><td class="num">{v["mean_abs_ar"]:.2%}</td></tr>'
-            for k, v in sorted(report["by_score"].items())
+            f'<tr><td>{escape(k)}</td><td class="num">{by_score[k]["n"]:,}</td>'
+            f'<td class="num">{by_score[k]["mean_abs_ar"]:.2%}</td></tr>'
+            for k in SCORE_BUCKETS if k in by_score
         )
         eval_html = (
             f'<p class="muted">{report["n"]:,} filings with next-day prices. '
