@@ -75,6 +75,29 @@ def test_backfill_does_not_count_a_weekend_or_a_quiet_day(conn, caplog):
     assert "no daily index" not in caplog.text
 
 
+IDX_1994 = "https://www.sec.gov/Archives/edgar/daily-index/1994/QTR3/form.{}.idx"
+
+
+@respx.mock
+def test_backfill_never_asks_for_an_index_before_edgar_has_any(conn, caplog):
+    # end=Wed Jul 6 1994 with days=7 reaches back to Wed Jun 29, but the first daily index is Fri Jul 1.
+    first = respx.get(IDX_1994.format("19940701")).respond(200, text="")
+    respx.get(IDX_1994.format("19940704")).respond(404)  # Independence Day
+    respx.get(IDX_1994.format("19940705")).respond(200, text="")
+    with caplog.at_level("WARNING", logger="tape.pipeline"):
+        stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=7, end=date(1994, 7, 6))
+    assert first.called
+    assert not any("QTR2" in str(c.request.url) for c in respx.calls)
+    assert stats.missing_days == 1  # only the holiday, not Jun 29 and 30
+    assert "skipping 2 earlier days" in caplog.text
+
+
+@respx.mock
+def test_backfill_entirely_before_edgar_requests_nothing(conn):
+    stats = backfill(conn, Edgar("ua", per_second=1000), FakeJev(), Settings(), days=20, end=date(1990, 1, 1))
+    assert stats.missing_days == 0 and not respx.calls
+
+
 def test_today_et_lags_utc_in_the_evening():
     # 9:30pm EDT on Wed Oct 21 is already Thu Oct 22 in UTC.
     assert today_et(datetime(2026, 10, 22, 1, 30, tzinfo=UTC)) == date(2026, 10, 21)

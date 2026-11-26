@@ -15,7 +15,16 @@ import httpx
 
 from tape import db
 from tape.config import Settings
-from tape.edgar import ET, Edgar, EdgarBlockedError, EmptyFilingError, FeedPage, FilingRef, IndexPageError
+from tape.edgar import (
+    EDGAR_DAILY_INDEX_START,
+    ET,
+    Edgar,
+    EdgarBlockedError,
+    EmptyFilingError,
+    FeedPage,
+    FilingRef,
+    IndexPageError,
+)
 from tape.edgar import is_outage as is_edgar_outage
 from tape.route import route
 from tape.score import SystemOneClient, is_outage, score_many
@@ -273,7 +282,13 @@ def backfill(conn: sqlite3.Connection, edgar: Edgar, jev: SystemOneClient, setti
              days: int, end: date | None = None) -> PassStats:
     end = end or today_et()
     with recorded(conn, "backfill") as stats:
-        for offset in range(days, 0, -1):
+        # Days before EDGAR's first daily index would each cost a request and read as a missing day,
+        # burying any real gap in the range that matters.
+        skipped = max(0, (EDGAR_DAILY_INDEX_START - (end - timedelta(days=days))).days)
+        if skipped:
+            log.warning("backfill window starts before EDGAR's first daily index (%s); skipping %d earlier days",
+                        EDGAR_DAILY_INDEX_START, skipped)
+        for offset in range(days - skipped, 0, -1):
             day = end - timedelta(days=offset)
             if day.weekday() >= 5:
                 continue

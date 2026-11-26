@@ -28,6 +28,9 @@ from tape.files import write_atomic
 
 SEC = "https://www.sec.gov"
 ET = ZoneInfo("America/New_York")
+# EDGAR's daily form indexes begin in 1994 QTR3; every earlier day answers 403/404, so a request for one
+# can never find a filing.
+EDGAR_DAILY_INDEX_START = date(1994, 7, 1)
 FEED_SIZE = 100  # the most entries one feed request asks for
 FEED_URL = (
     SEC + "/cgi-bin/browse-edgar?action=getcurrent&type=8-K&company=&dateb=&owner=include"
