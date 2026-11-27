@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
 import feedparser
@@ -417,8 +417,28 @@ def _feed_refs(entries: list) -> list[FilingRef]:
         acc = _ACC.search(e.get("id", "") + " " + e.get("summary", ""))
         if not m or not acc or m["form"] != "8-K":  # skip 8-K/A amendments
             continue
-        refs.append(FilingRef(acc[1], m["cik"], m["company"].strip(), m["form"], e.link))
+        url = _feed_index_url(e.get("link", ""), m["cik"], acc[1])
+        refs.append(FilingRef(acc[1], m["cik"], m["company"].strip(), m["form"], url))
     return _dedupe(refs)
+
+
+def _index_url(cik: str, acc_no: str) -> str:
+    """The filing index page EDGAR keeps for every filing, built from its CIK and accession number."""
+    return f"{SEC}/Archives/edgar/data/{int(cik)}/{acc_no.replace('-', '')}/{acc_no}-index.htm"
+
+
+def _feed_index_url(link: str, cik: str, acc_no: str) -> str:
+    """A feed entry's index URL: its link when that is a page on www.sec.gov, else the canonical one.
+
+    feedparser falls back to the entry's <id> when there's no <link>, and on EDGAR's feed that is a URN.
+    Fetching one fails as a transport error, which reads as an outage on every pass, so the filing would
+    never be fetched or given up on. The CIK and accession number are always enough to find it.
+    """
+    parts = urlsplit(link)
+    if parts.scheme == "https" and parts.hostname == "www.sec.gov":
+        return link
+    log.warning("feed entry for %s has no usable link (%r); using its index URL", acc_no, link)
+    return _index_url(cik, acc_no)
 
 
 def parse_form_index(text: str) -> list[FilingRef]:
@@ -450,9 +470,7 @@ def _parse_index_line(line: str) -> FilingRef | None:
     if not company:
         return None
     acc_no = acc[1]
-    cik = int(m["cik"])
-    folder = f"{SEC}/Archives/edgar/data/{cik}/{acc_no.replace('-', '')}"
-    return FilingRef(acc_no, f"{cik:010d}", company, "8-K", f"{folder}/{acc_no}-index.htm")
+    return FilingRef(acc_no, f"{int(m['cik']):010d}", company, "8-K", _index_url(m["cik"], acc_no))
 
 
 def _dedupe(refs: list[FilingRef]) -> list[FilingRef]:
