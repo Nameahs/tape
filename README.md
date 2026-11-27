@@ -29,7 +29,7 @@ tape brief ACC --text .. # save a brief the agent wrote (refused if one is saved
 tape digest [--send]     # material filings no digest has reported yet (optionally to Telegram)
 tape digest --json       # the same filings as JSON, for the agent to send itself
 tape digest --mark ACC.. # mark the filings the agent sent as reported
-tape stats [--days 7]    # filings, scores, routes and Jev spend per day, plus EDGAR blocks, feed gaps, missing daily indexes and routed filings no digest has reported
+tape stats [--days 7]    # filings, scores, routes and Jev spend per day, when the last pass started, plus EDGAR blocks, feed gaps, missing daily indexes and routed filings no digest has reported
 tape retry               # filings Tape gave up scoring or fetching; --score/--fetch clear them for the next pass
 tape backfill --days 90  # score past filings for the evaluation
 tape evaluate            # prices (last 30 days; --days N), abnormal returns, metrics

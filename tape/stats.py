@@ -27,6 +27,12 @@ FROM runs
 WHERE julianday(started_at) >= julianday(?) AND julianday(started_at) < julianday(?)
 """
 
+# Most recent scheduled pass, inside the window or not: a schedule that stopped firing shows up as a stale
+# time here even while older runs still fill the window. Backfills are run by hand, so they don't count.
+LAST_PASS_SQL = """
+SELECT started_at FROM runs WHERE kind = 'pass' ORDER BY julianday(started_at) DESC LIMIT 1
+"""
+
 
 @dataclass
 class DayStats:
@@ -58,6 +64,8 @@ class Stats:
     missing_index_days: int = 0
     # Of those, how many EDGAR failed to serve filings to; a later pass or backfill fetches them.
     outage_runs: int = 0
+    # When the most recent pass started (any day, not just the window); None if no pass ever ran.
+    last_pass_at: datetime | None = None
     # Routed filings no digest has reported: those the default digest window still covers, and those it
     # has aged past, which the scheduled digest will never report. Counted only when collect() is given
     # the window, and like given_up, across all days rather than the stats window.
@@ -107,6 +115,7 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None, 
     window = (start_utc.isoformat(), end_utc.isoformat())
     spend = conn.execute(SPEND_SQL, window).fetchone()
     runs = conn.execute(RUNS_SQL, window).fetchone()
+    last_pass = conn.execute(LAST_PASS_SQL).fetchone()
     undigested = expired = 0
     if digest_window_hours is not None:
         cutoff = (now or datetime.now(UTC)) - timedelta(hours=digest_window_hours)
@@ -116,6 +125,7 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None, 
                  given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)),
                  runs=int(runs["n"]), blocked_runs=int(runs["blocked"]), feed_gap_runs=int(runs["feed_gaps"]),
                  missing_index_days=int(runs["missing_days"]), outage_runs=int(runs["outages"]),
+                 last_pass_at=datetime.fromisoformat(last_pass["started_at"]) if last_pass else None,
                  digest_window_hours=digest_window_hours, undigested=undigested, undigested_expired=expired)
 
 
@@ -139,6 +149,8 @@ def format_stats(s: Stats) -> str:
     if s.cost_unknown:
         spend += f" (cost unknown for {s.cost_unknown:,} score(s))"
     lines.append(spend)
+    last = s.last_pass_at.astimezone(ET).strftime("%Y-%m-%d %H:%M ET") if s.last_pass_at else "never"
+    lines.append(f"Last pass started {last}")
     if s.blocked_runs:
         lines.append(f"EDGAR rate-limited {s.blocked_runs:,} of {s.runs:,} runs in window")
     if s.outage_runs:
