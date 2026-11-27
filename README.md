@@ -40,9 +40,9 @@ tape dashboard           # writes out/dashboard.html
 Only `init`, `run` and `backfill` create the store. The other commands exit with status 2 if
 `TAPE_DB_PATH` doesn't point at one, since an empty store would look just like a quiet day.
 
-`run` and `backfill` hold a lock (`tape.db.lock`, next to the store) for the whole pass, so a
-scheduled `tape run` that starts while a long backfill is going doesn't fetch and score the same
-filings a second time. It prints one line and exits 0 instead; a `tape backfill` that finds the
+`run` and `backfill` hold a lock (`tape.db.lock`, next to the store, or next to its target if
+`TAPE_DB_PATH` is a symlink) for the whole pass, so a scheduled `tape run` that starts while a long
+backfill is going doesn't fetch and score the same filings a second time. It prints one line and exits 0 instead; a `tape backfill` that finds the
 lock held exits 1. `tape reroute` takes the same lock, since it rewrites routes a pass is also writing,
 and exits 1 without changing anything if a pass holds it; `reroute --dry-run` writes nothing and
 doesn't need it. The other commands only read the store, or write a single brief, and never wait.
