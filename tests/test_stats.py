@@ -83,7 +83,8 @@ def test_format_stats(conn):
     assert lines[0].split() == ["day", "filings", "scored", "now", "digest", "log", "cost"]
     assert lines[2].split() == ["2026-10-16", "1", "1", "1", "0", "0", "$0.01"]
     assert lines[3].split() == ["total", "1", "1", "1", "0", "0"]
-    assert lines[4:] == ["Jev spend in window: $0.01 over 1 calls", "Last pass started never"]
+    assert lines[4:] == ["Jev spend in window: $0.01 over 1 calls", "Last pass started never",
+                         "No pipeline runs in window (is the scheduled job still running?)"]
     assert collect(conn, days=2, today=TODAY).cost_unknown == 0
 
 
@@ -276,4 +277,12 @@ def test_last_pass_is_reported_even_when_it_is_older_than_the_window(conn):
     db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-01T14:00:00Z"))
     s = collect(conn, days=7, today=TODAY)
     assert s.runs == 0
-    assert "Last pass started 2026-10-01 10:00 ET" in format_stats(s).splitlines()
+    lines = format_stats(s).splitlines()
+    assert "Last pass started 2026-10-01 10:00 ET" in lines
+    assert "No pipeline runs in window (is the scheduled job still running?)" in lines
+
+
+def test_no_runs_line_is_omitted_when_a_run_started_in_the_window(conn):
+    # Any run counts, a backfill included: the window isn't empty, and the last-pass line covers the schedule.
+    db.finish_run(conn, db.start_run(conn, "backfill", started_at="2026-10-16T10:30:00Z"))
+    assert "No pipeline runs" not in format_stats(collect(conn, days=1, today=TODAY))

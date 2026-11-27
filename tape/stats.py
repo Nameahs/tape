@@ -151,6 +151,8 @@ def format_stats(s: Stats) -> str:
     lines.append(spend)
     last = s.last_pass_at.astimezone(ET).strftime("%Y-%m-%d %H:%M ET") if s.last_pass_at else "never"
     lines.append(f"Last pass started {last}")
+    if not s.runs:
+        lines.append("No pipeline runs in window (is the scheduled job still running?)")
     if s.blocked_runs:
         lines.append(f"EDGAR rate-limited {s.blocked_runs:,} of {s.runs:,} runs in window")
     if s.outage_runs:
