@@ -40,6 +40,36 @@ def test_parse_feed_skips_amendments():
     assert refs == [FilingRef("0000000001-26-000101", "0000000001", "Example Corp", "8-K", INDEX)]
 
 
+_LINKLESS_ENTRY = (
+    "<entry><title>8-K - Example Corp (0000000001) (Filer)</title>{link}"
+    "<id>urn:tag:sec.gov,2008:accession-number=0000000001-26-000101</id></entry>"
+)
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "",  # no link at all: feedparser falls back to the URN in <id>
+        '<link rel="alternate" href="https://example.com/0000000001-26-000101-index.htm"/>',
+        '<link rel="alternate" href="http://www.sec.gov/Archives/edgar/data/1/x-index.htm"/>',
+        '<link rel="alternate" href="https://www.sec.gov.example.com/x-index.htm"/>',
+    ],
+)
+def test_parse_feed_builds_the_index_url_when_the_link_is_unusable(link, caplog):
+    xml = f'<feed xmlns="http://www.w3.org/2005/Atom">{_LINKLESS_ENTRY.format(link=link)}</feed>'
+    [ref] = parse_feed(xml)
+    assert ref.index_url == INDEX
+    assert "no usable link" in caplog.text
+
+
+def test_parse_feed_keeps_a_link_on_sec_gov(caplog):
+    link = f'<link rel="alternate" href="{FOLDER}/other-index.htm"/>'
+    xml = f'<feed xmlns="http://www.w3.org/2005/Atom">{_LINKLESS_ENTRY.format(link=link)}</feed>'
+    [ref] = parse_feed(xml)
+    assert ref.index_url == f"{FOLDER}/other-index.htm"
+    assert "no usable link" not in caplog.text
+
+
 def test_parse_form_index():
     refs = parse_form_index((FIX / "form.idx").read_text())
     assert [r.accession_no for r in refs] == ["0000000001-26-000101"]
