@@ -14,6 +14,9 @@ class PipelineBusy(Exception):
 
 
 def lock_path(db_path: Path) -> Path:
+    """`<db>.lock` next to the real store. Resolved, so a store reached through a symlink locks the
+    same file as its target; non-strict, so a store that doesn't exist yet still gets a lock."""
+    db_path = Path(db_path).resolve()
     return db_path.with_name(db_path.name + ".lock")
 
 
