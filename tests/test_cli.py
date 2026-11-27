@@ -189,7 +189,7 @@ def test_stats_command(tmp_path, monkeypatch, capsys):
     assert main(["stats", "--days", "3"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].split()[:3] == ["day", "filings", "scored"]
-    assert len(lines) == 1 + 3 + 3  # header, one row per day, total, spend, undigested
+    assert len(lines) == 1 + 3 + 5  # header, one row per day, total, spend, last pass, no runs, undigested
     # The seeded 'now' filing hasn't gone out in a digest yet; stats uses the digest's own lookback.
     assert lines[-1] == "1 routed filing(s) not yet in a digest"
 
