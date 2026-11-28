@@ -362,10 +362,30 @@ def test_header_shows_when_the_last_pass_started_in_et(conn):
 
 def test_header_ignores_backfills_for_the_last_pass(conn):
     # Backfills are started by hand, so they say nothing about whether the schedule is firing.
-    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-13T14:00:00+00:00"))
-    db.finish_run(conn, db.start_run(conn, "backfill", started_at="2026-10-13T21:00:00+00:00"))
-    assert "Last pipeline pass: 2026-10-13 10:00 ET." in build(conn, None, NOW)
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-13T21:00:00+00:00"))
+    db.finish_run(conn, db.start_run(conn, "backfill", started_at="2026-10-13T21:30:00+00:00"))
+    assert "Last pipeline pass: 2026-10-13 17:00 ET." in build(conn, None, NOW)
 
 
-def test_header_says_never_when_no_pass_has_run(conn):
-    assert "Last pipeline pass: never." in build(conn, None, NOW)
+def test_header_warns_when_no_pass_has_run(conn):
+    html = build(conn, None, NOW)
+    assert '<p class="warn" role="status">No pipeline pass has run yet' in html
+
+
+def test_recent_pass_is_not_a_warning(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-13T20:00:00+00:00"))  # exactly 2h before
+    html = build(conn, None, NOW)
+    assert '<p class="muted">Last pipeline pass: 2026-10-13 16:00 ET.</p>' in html
+    assert 'class="warn"' not in html
+
+
+def test_header_warns_when_the_last_pass_is_stale(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-13T19:59:00+00:00"))
+    html = build(conn, None, NOW)
+    assert ('<p class="warn" role="status">Last pipeline pass: 2026-10-13 15:59 ET, 2 hours before this page '
+            "was built.") in html
+
+
+def test_stale_warning_counts_days_once_the_gap_is_long(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-09T20:00:00+00:00"))
+    assert "Last pipeline pass: 2026-10-09 16:00 ET, 4 days before this page was built." in build(conn, None, NOW)
