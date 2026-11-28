@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from tape.files import write_atomic
 from tape.fmt import fmt_metric
+from tape.stats import LAST_PASS_SQL
 
 log = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
@@ -225,6 +226,17 @@ def _cap_note(report: dict) -> str:
             f'({capped:,} filing{"s" if capped != 1 else ""} capped).</p>')
 
 
+def _last_pass(conn: sqlite3.Connection) -> datetime | None:
+    """When the most recent scheduled pass started, the same reading `tape stats` gives; None if none has."""
+    row = conn.execute(LAST_PASS_SQL).fetchone()
+    return datetime.fromisoformat(row["started_at"]) if row else None
+
+
+def _last_pass_html(last: datetime | None) -> str:
+    when = f"{last.astimezone(ET):%Y-%m-%d %H:%M} ET" if last else "never"
+    return f'<p class="muted">Last pipeline pass: {escape(when)}.</p>'
+
+
 def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=24)).isoformat()
@@ -293,6 +305,7 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
 <body><div class="viz-root"><main>
 <h1>Tape</h1>
 <p class="muted">SEC 8-K filings scored by Jev. Updated {now:%Y-%m-%d %H:%M} UTC.</p>
+{_last_pass_html(_last_pass(conn))}
 <div class="tiles">{"".join(tiles)}</div>
 <h2>Does a higher score mean a bigger move?</h2>
 {eval_html}

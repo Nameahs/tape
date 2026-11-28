@@ -351,3 +351,21 @@ def test_write_shows_cap_note_from_a_report_on_disk(conn, tmp_path):
     report_path.write_text(evaluate(_frame(signal=1.0, n=300)).to_json(), encoding="utf-8")
     out = write(conn, tmp_path / "index.html", report_path)
     assert "Means cap |abnormal return| at " in out.read_text(encoding="utf-8")
+
+
+def test_header_shows_when_the_last_pass_started_in_et(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-13T19:55:00+00:00"))
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-13T20:00:00+00:00"))
+    html = build(conn, None, NOW)
+    assert "Last pipeline pass: 2026-10-13 16:00 ET." in html
+
+
+def test_header_ignores_backfills_for_the_last_pass(conn):
+    # Backfills are started by hand, so they say nothing about whether the schedule is firing.
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-13T14:00:00+00:00"))
+    db.finish_run(conn, db.start_run(conn, "backfill", started_at="2026-10-13T21:00:00+00:00"))
+    assert "Last pipeline pass: 2026-10-13 10:00 ET." in build(conn, None, NOW)
+
+
+def test_header_says_never_when_no_pass_has_run(conn):
+    assert "Last pipeline pass: never." in build(conn, None, NOW)
