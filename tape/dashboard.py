@@ -13,10 +13,14 @@ from zoneinfo import ZoneInfo
 
 from tape.files import write_atomic
 from tape.fmt import fmt_metric
+from tape.stats import LAST_PASS_SQL
 
 log = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
 DAILY_DAYS = 14
+# Passes run every few minutes on weekdays and the nightly build follows the last one by about an hour, so a
+# longer gap before the page was built means the schedule stopped or the page was built outside it.
+STALE_AFTER = timedelta(hours=2)
 # The materiality buckets `tape evaluate` writes, in score order. The chart has a column for each.
 SCORE_BUCKETS = ("1", "2", "3", "4", "5")
 # Must keep the exact julianday(scored_at) expression so SQLite seeks on idx_scores_scored_jd.
@@ -30,12 +34,12 @@ WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) <= julianday
 
 CSS = """
 .viz-root { color-scheme: light; --surface-1:#fcfcfb; --surface-2:#f3f2ef; --rule:#e4e2dc;
-  --text-primary:#0b0b0b; --text-secondary:#52514e; --series-1:#2a78d6; }
+  --text-primary:#0b0b0b; --text-secondary:#52514e; --series-1:#2a78d6; --warn:#b54708; }
 @media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .viz-root {
   color-scheme: dark; --surface-1:#1a1a19; --surface-2:#242422; --rule:#353532;
-  --text-primary:#f0efec; --text-secondary:#c3c2b7; --series-1:#3987e5; } }
+  --text-primary:#f0efec; --text-secondary:#c3c2b7; --series-1:#3987e5; --warn:#f0a35e; } }
 :root[data-theme="dark"] .viz-root { color-scheme: dark; --surface-1:#1a1a19; --surface-2:#242422;
-  --rule:#353532; --text-primary:#f0efec; --text-secondary:#c3c2b7; --series-1:#3987e5; }
+  --rule:#353532; --text-primary:#f0efec; --text-secondary:#c3c2b7; --series-1:#3987e5; --warn:#f0a35e; }
 * { box-sizing: border-box; }
 body { margin: 0; }
 .viz-root { background: var(--surface-1); color: var(--text-primary); min-height: 100vh;
@@ -44,6 +48,7 @@ main { max-width: 960px; margin: 0 auto; }
 h1 { font-size: 22px; margin: 0 0 4px; } h2 { font-size: 16px; margin: 32px 0 8px; }
 h3 { font-size: 14px; margin: 20px 0 6px; }
 .muted { color: var(--text-secondary); }
+.warn { color: var(--warn); font-weight: 600; border-left: 3px solid var(--warn); padding-left: 8px; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 20px; }
 .tile { background: var(--surface-2); border-radius: 8px; padding: 12px 14px; }
 .tile b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
@@ -225,6 +230,28 @@ def _cap_note(report: dict) -> str:
             f'({capped:,} filing{"s" if capped != 1 else ""} capped).</p>')
 
 
+def _last_pass(conn: sqlite3.Connection) -> datetime | None:
+    """When the most recent scheduled pass started, the same reading `tape stats` gives; None if none has."""
+    row = conn.execute(LAST_PASS_SQL).fetchone()
+    return datetime.fromisoformat(row["started_at"]) if row else None
+
+
+def _last_pass_html(last: datetime | None, now: datetime) -> str:
+    """The last pass time, as a warning when none has run or it is older than STALE_AFTER at build time:
+    without it an empty 24-hour section from a stopped schedule reads like a quiet day."""
+    if last is None:
+        return ('<p class="warn" role="status">No pipeline pass has run yet, so nothing below is live. '
+                'Check that the scheduled job is set up.</p>')
+    when = f"{last.astimezone(ET):%Y-%m-%d %H:%M} ET"
+    age = now - last
+    if age <= STALE_AFTER:
+        return f'<p class="muted">Last pipeline pass: {escape(when)}.</p>'
+    hours = age.total_seconds() / 3600
+    ago = f"{hours:.0f} hours" if hours < 48 else f"{hours / 24:.0f} days"
+    return (f'<p class="warn" role="status">Last pipeline pass: {escape(when)}, {ago} before this page was built. '
+            'If that isn\'t a weekend or holiday, check that the scheduled job is still running.</p>')
+
+
 def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = None) -> str:
     now = now or datetime.now(UTC)
     since = (now - timedelta(hours=24)).isoformat()
@@ -293,6 +320,7 @@ def build(conn: sqlite3.Connection, report: dict | None, now: datetime | None = 
 <body><div class="viz-root"><main>
 <h1>Tape</h1>
 <p class="muted">SEC 8-K filings scored by Jev. Updated {now:%Y-%m-%d %H:%M} UTC.</p>
+{_last_pass_html(_last_pass(conn), now)}
 <div class="tiles">{"".join(tiles)}</div>
 <h2>Does a higher score mean a bigger move?</h2>
 {eval_html}
