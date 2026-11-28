@@ -22,10 +22,21 @@ WHERE julianday(scored_at) >= julianday(?) AND julianday(scored_at) < julianday(
 
 RUNS_SQL = """
 SELECT COUNT(*) AS n, COALESCE(SUM(blocked), 0) AS blocked, COALESCE(SUM(feed_gap), 0) AS feed_gaps,
-    COALESCE(SUM(missing_days), 0) AS missing_days, COALESCE(SUM(outage), 0) AS outages
+    COALESCE(SUM(missing_days), 0) AS missing_days, COALESCE(SUM(outage), 0) AS outages,
+    COALESCE(SUM(error IS NOT NULL AND NOT blocked), 0) AS failed
 FROM runs
 WHERE julianday(started_at) >= julianday(?) AND julianday(started_at) < julianday(?)
 """
+
+# The newest error among the window's failed runs, for a hint at what keeps breaking. Same filter as `failed`.
+LAST_ERROR_SQL = """
+SELECT error FROM runs
+WHERE julianday(started_at) >= julianday(?) AND julianday(started_at) < julianday(?)
+    AND error IS NOT NULL AND NOT blocked
+ORDER BY julianday(started_at) DESC LIMIT 1
+"""
+
+ERROR_PREVIEW_CHARS = 120
 
 # Most recent scheduled pass, inside the window or not: a schedule that stopped firing shows up as a stale
 # time here even while older runs still fill the window. Backfills are run by hand, so they don't count.
@@ -64,6 +75,10 @@ class Stats:
     missing_index_days: int = 0
     # Of those, how many EDGAR failed to serve filings to; a later pass or backfill fetches them.
     outage_runs: int = 0
+    # Of those, how many raised (a bad Jev key, a schema problem, a bug), and the newest such error. A run
+    # EDGAR blocked also records its exception, but blocked_runs already reports it, so it isn't counted here.
+    failed_runs: int = 0
+    last_error: str | None = None
     # When the most recent pass started (any day, not just the window); None if no pass ever ran.
     last_pass_at: datetime | None = None
     # Routed filings no digest has reported: those the default digest window still covers, and those it
@@ -116,6 +131,7 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None, 
     spend = conn.execute(SPEND_SQL, window).fetchone()
     runs = conn.execute(RUNS_SQL, window).fetchone()
     last_pass = conn.execute(LAST_PASS_SQL).fetchone()
+    last_error = conn.execute(LAST_ERROR_SQL, window).fetchone() if runs["failed"] else None
     undigested = expired = 0
     if digest_window_hours is not None:
         cutoff = (now or datetime.now(UTC)) - timedelta(hours=digest_window_hours)
@@ -125,6 +141,7 @@ def collect(conn: sqlite3.Connection, days: int = 7, today: date | None = None, 
                  given_up=len(db.given_up(conn)), fetch_given_up=len(db.fetch_given_up(conn)),
                  runs=int(runs["n"]), blocked_runs=int(runs["blocked"]), feed_gap_runs=int(runs["feed_gaps"]),
                  missing_index_days=int(runs["missing_days"]), outage_runs=int(runs["outages"]),
+                 failed_runs=int(runs["failed"]), last_error=last_error["error"] if last_error else None,
                  last_pass_at=datetime.fromisoformat(last_pass["started_at"]) if last_pass else None,
                  digest_window_hours=digest_window_hours, undigested=undigested, undigested_expired=expired)
 
@@ -153,6 +170,8 @@ def format_stats(s: Stats) -> str:
     lines.append(f"Last pass started {last}")
     if not s.runs:
         lines.append("No pipeline runs in window (is the scheduled job still running?)")
+    if s.failed_runs:
+        lines.append(f"{s.failed_runs:,} of {s.runs:,} runs in window failed (last error: {_preview(s.last_error)})")
     if s.blocked_runs:
         lines.append(f"EDGAR rate-limited {s.blocked_runs:,} of {s.runs:,} runs in window")
     if s.outage_runs:
@@ -184,3 +203,10 @@ def format_stats(s: Stats) -> str:
                      "be reported (tape digest --hours N catches up)")
         lines.append(line)
     return "\n".join(lines)
+
+
+def _preview(error: str | None) -> str:
+    """The first line of a stored error, cut short enough to keep the report one line per item."""
+    lines = (error or "").strip().splitlines()
+    first = lines[0] if lines else "none recorded"
+    return first if len(first) <= ERROR_PREVIEW_CHARS else first[:ERROR_PREVIEW_CHARS - 3] + "..."
