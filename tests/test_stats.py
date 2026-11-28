@@ -319,3 +319,23 @@ def test_long_errors_are_cut_short_in_the_report(conn):
 def test_format_stats_omits_failed_line_when_no_run_failed(conn):
     db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z"))
     assert "failed (last error" not in format_stats(collect(conn, days=1, today=TODAY))
+
+
+NOW = datetime(2026, 10, 16, 16, 0, tzinfo=UTC)
+
+
+def test_counts_runs_that_never_finished_past_the_grace_period(conn):
+    db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z")  # killed two hours ago
+    db.start_run(conn, "pass", started_at="2026-10-16T15:30:00Z")  # still running
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T13:00:00Z"))
+    db.start_run(conn, "pass", started_at="2026-10-01T14:00:00Z")  # outside the window
+    s = collect(conn, days=2, today=TODAY, now=NOW)
+    assert (s.runs, s.unfinished_runs) == (3, 1)
+    assert "1 run(s) in window never finished (process killed or crashed)" in format_stats(s).splitlines()
+
+
+def test_a_run_still_in_progress_is_not_reported_as_unfinished(conn):
+    db.start_run(conn, "pass", started_at="2026-10-16T15:05:00Z")
+    s = collect(conn, days=1, today=TODAY, now=NOW)
+    assert s.unfinished_runs == 0
+    assert "never finished" not in format_stats(s)
