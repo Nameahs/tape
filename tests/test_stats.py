@@ -286,3 +286,56 @@ def test_no_runs_line_is_omitted_when_a_run_started_in_the_window(conn):
     # Any run counts, a backfill included: the window isn't empty, and the last-pass line covers the schedule.
     db.finish_run(conn, db.start_run(conn, "backfill", started_at="2026-10-16T10:30:00Z"))
     assert "No pipeline runs" not in format_stats(collect(conn, days=1, today=TODAY))
+
+
+def test_counts_runs_that_failed_and_shows_the_newest_error(conn):
+    for started_at, error in [("2026-10-16T14:00:00Z", "AuthError: bad key"),
+                              ("2026-10-16T14:05:00Z", None),
+                              ("2026-10-16T14:10:00Z", "OperationalError: no such column: x\nTraceback..."),
+                              ("2026-10-01T14:00:00Z", "AuthError: outside the window")]:
+        db.finish_run(conn, db.start_run(conn, "pass", started_at=started_at), error=error)
+    s = collect(conn, days=2, today=TODAY)
+    assert (s.runs, s.failed_runs) == (3, 2)
+    assert s.last_error.startswith("OperationalError")
+    assert ("2 of 3 runs in window failed (last error: OperationalError: no such column: x)"
+            in format_stats(s).splitlines())
+
+
+def test_blocked_runs_are_not_also_counted_as_failed(conn):
+    db.finish_run(conn, db.start_run(conn, "backfill", started_at="2026-10-16T14:00:00Z"), blocked=True,
+                  error="EdgarBlockedError: 403")
+    s = collect(conn, days=1, today=TODAY)
+    assert (s.blocked_runs, s.failed_runs, s.last_error) == (1, 0, None)
+    assert "failed (last error" not in format_stats(s)
+
+
+def test_long_errors_are_cut_short_in_the_report(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z"), error="ValueError: " + "x" * 300)
+    line = next(ln for ln in format_stats(collect(conn, days=1, today=TODAY)).splitlines() if "failed" in ln)
+    assert line.endswith("...)")
+    assert len(line) < 200
+
+
+def test_format_stats_omits_failed_line_when_no_run_failed(conn):
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z"))
+    assert "failed (last error" not in format_stats(collect(conn, days=1, today=TODAY))
+
+
+NOW = datetime(2026, 10, 16, 16, 0, tzinfo=UTC)
+
+
+def test_counts_runs_that_never_finished_past_the_grace_period(conn):
+    db.start_run(conn, "pass", started_at="2026-10-16T14:00:00Z")  # killed two hours ago
+    db.start_run(conn, "pass", started_at="2026-10-16T15:30:00Z")  # still running
+    db.finish_run(conn, db.start_run(conn, "pass", started_at="2026-10-16T13:00:00Z"))
+    db.start_run(conn, "pass", started_at="2026-10-01T14:00:00Z")  # outside the window
+    s = collect(conn, days=2, today=TODAY, now=NOW)
+    assert (s.runs, s.unfinished_runs) == (3, 1)
+    assert "1 run(s) in window never finished (process killed or crashed)" in format_stats(s).splitlines()
+
+
+def test_a_run_still_in_progress_is_not_reported_as_unfinished(conn):
+    db.start_run(conn, "pass", started_at="2026-10-16T15:05:00Z")
+    s = collect(conn, days=1, today=TODAY, now=NOW)
+    assert s.unfinished_runs == 0
+    assert "never finished" not in format_stats(s)
